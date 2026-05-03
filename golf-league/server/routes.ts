@@ -13,6 +13,7 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { computeMatchup, allocateStrokes } from "./lib/scoring";
 import { computePayouts } from "./lib/payouts";
+import { searchCourses as gcaSearch, getCourse as gcaGetCourse } from "./lib/golfCourseApi";
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   app.use(authMiddleware);
@@ -197,6 +198,64 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       storage.recomputeFromWeek(earliest.id);
     }
     res.json(storage.listHoles(courseId));
+  });
+
+  // ===== Course Catalog (GolfCourseAPI proxy + local cache) =====
+  // All endpoints are admin-only: search hits the upstream API (rate-limited),
+  // import caches a course's tees + holes locally, and apply maps a catalog
+  // tee onto an existing 9-hole league layout.
+  app.get("/api/catalog/search", requireAdmin, async (req, res) => {
+    const q = String(req.query.q || "").trim();
+    if (!q) return res.status(400).json({ message: "Missing q" });
+    try {
+      const result = await gcaSearch(q);
+      res.json(result);
+    } catch (err: any) {
+      res.status(502).json({ message: err?.message || "Upstream error" });
+    }
+  });
+
+  app.get("/api/catalog/courses", requireAdmin, (_req, res) => {
+    res.json(storage.listGolfCourses());
+  });
+
+  app.get("/api/catalog/courses/:id", requireAdmin, (req, res) => {
+    const id = Number(req.params.id);
+    const course = storage.getGolfCourse(id);
+    if (!course) return res.status(404).json({ message: "Not found" });
+    const tees = storage.listGolfCourseTees(id).map(t => ({
+      ...t,
+      holes: storage.listGolfCourseHoles(t.id),
+    }));
+    res.json({ ...course, tees });
+  });
+
+  app.post("/api/catalog/import", requireAdmin, async (req, res) => {
+    const gcaId = Number(req.body?.gcaId);
+    if (!gcaId) return res.status(400).json({ message: "Missing gcaId" });
+    try {
+      const payload = await gcaGetCourse(gcaId);
+      const saved = storage.importGolfCourse(payload);
+      res.json(saved);
+    } catch (err: any) {
+      res.status(502).json({ message: err?.message || "Import failed" });
+    }
+  });
+
+  app.post("/api/catalog/apply", requireAdmin, (req, res) => {
+    const schema = z.object({
+      layoutCourseId: z.number().int(),
+      catalogCourseId: z.number().int(),
+      teeId: z.number().int(),
+      startHole: z.number().int().min(1).max(10).default(1),
+    });
+    const args = schema.parse(req.body);
+    try {
+      const result = storage.applyCatalogTeeToLayout(args);
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ message: err?.message || "Apply failed" });
+    }
   });
 
   // ===== Weeks =====

@@ -193,6 +193,59 @@ export const settings = sqliteTable("settings", {
 });
 export type Settings = typeof settings.$inferSelect;
 
+// ---------- Golf Course Catalog ----------
+// Cache of courses imported from GolfCourseAPI (golfcourseapi.com).
+// Decoupled from the league's per-9 `courses` table above: a catalog course
+// represents a real-world course (full 18 holes, multiple tees), and admins
+// can "apply" any tee from it to populate one of the league's 9-hole layouts.
+export const golfCourses = sqliteTable("golf_courses", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  gcaId: integer("gca_id").notNull().unique(), // GolfCourseAPI numeric id
+  clubName: text("club_name").notNull(),
+  courseName: text("course_name").notNull(),
+  address: text("address"),
+  city: text("city"),
+  state: text("state"),
+  country: text("country"),
+  latitude: real("latitude"),
+  longitude: real("longitude"),
+  importedAt: integer("imported_at").notNull(), // unix ms
+});
+export type GolfCourse = typeof golfCourses.$inferSelect;
+
+export const golfCourseTees = sqliteTable("golf_course_tees", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  golfCourseId: integer("golf_course_id").notNull(),
+  gender: text("gender").notNull(), // 'male' | 'female'
+  teeName: text("tee_name").notNull(),
+  courseRating: real("course_rating"),
+  slopeRating: integer("slope_rating"),
+  bogeyRating: real("bogey_rating"),
+  totalYards: integer("total_yards"),
+  totalMeters: integer("total_meters"),
+  numberOfHoles: integer("number_of_holes"),
+  parTotal: integer("par_total"),
+  frontCourseRating: real("front_course_rating"),
+  frontSlopeRating: integer("front_slope_rating"),
+  frontBogeyRating: real("front_bogey_rating"),
+  backCourseRating: real("back_course_rating"),
+  backSlopeRating: integer("back_slope_rating"),
+  backBogeyRating: real("back_bogey_rating"),
+});
+export type GolfCourseTee = typeof golfCourseTees.$inferSelect;
+
+export const golfCourseHoles = sqliteTable("golf_course_holes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  teeId: integer("tee_id").notNull(),
+  holeNumber: integer("hole_number").notNull(), // 1..18
+  par: integer("par").notNull(),
+  yardage: integer("yardage"),
+  handicap: integer("handicap"),
+}, (t) => ({
+  uniqTeeHole: uniqueIndex("uniq_tee_hole").on(t.teeId, t.holeNumber),
+}));
+export type GolfCourseHole = typeof golfCourseHoles.$inferSelect;
+
 // ---------- Sessions ----------
 export const sessions = sqliteTable("sessions", {
   id: text("id").primaryKey(),

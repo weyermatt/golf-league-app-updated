@@ -1,12 +1,14 @@
 import {
   users, players, teams, courses, holes, weeks, matchups, scores, skins,
   handicapHistory, settings, sessions, teamScores, teamHandicapHistory,
+  golfCourses, golfCourseTees, golfCourseHoles,
 } from "@shared/schema";
 import type {
   User, InsertUser, Player, InsertPlayer, Team, InsertTeam,
   Course, InsertCourse, Hole, InsertHole, Week, InsertWeek,
   Matchup, InsertMatchup, Score, InsertScore, Skin, HandicapHistory, Settings,
   TeamScore, InsertTeamScore, TeamHandicapHistory,
+  GolfCourse, GolfCourseTee, GolfCourseHole,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
@@ -17,6 +19,7 @@ import {
 } from "./lib/handicap";
 import { computeMatchup, type HoleInfo, type TeamForScoring, type PointsConfig } from "./lib/scoring";
 import { computeSkins, computeSkinsByMatchup } from "./lib/skins";
+import type { GolfCourseApiCourse } from "./lib/golfCourseApi";
 
 const sqlite = new Database("data.db");
 sqlite.pragma("journal_mode = WAL");
@@ -139,6 +142,47 @@ function ensureSchema() {
       user_id INTEGER NOT NULL,
       expires_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS golf_courses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      gca_id INTEGER NOT NULL UNIQUE,
+      club_name TEXT NOT NULL,
+      course_name TEXT NOT NULL,
+      address TEXT,
+      city TEXT,
+      state TEXT,
+      country TEXT,
+      latitude REAL,
+      longitude REAL,
+      imported_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS golf_course_tees (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      golf_course_id INTEGER NOT NULL,
+      gender TEXT NOT NULL,
+      tee_name TEXT NOT NULL,
+      course_rating REAL,
+      slope_rating INTEGER,
+      bogey_rating REAL,
+      total_yards INTEGER,
+      total_meters INTEGER,
+      number_of_holes INTEGER,
+      par_total INTEGER,
+      front_course_rating REAL,
+      front_slope_rating INTEGER,
+      front_bogey_rating REAL,
+      back_course_rating REAL,
+      back_slope_rating INTEGER,
+      back_bogey_rating REAL
+    );
+    CREATE TABLE IF NOT EXISTS golf_course_holes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tee_id INTEGER NOT NULL,
+      hole_number INTEGER NOT NULL,
+      par INTEGER NOT NULL,
+      yardage INTEGER,
+      handicap INTEGER
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uniq_tee_hole ON golf_course_holes(tee_id, hole_number);
   `);
 
   // Idempotent ALTERs for upgrades from older DBs.
@@ -424,6 +468,176 @@ export class Storage {
   }
   updateSettings(patch: Partial<Settings>) {
     return db.update(settings).set(patch).where(eq(settings.id, 1)).returning().get();
+  }
+
+  // ---- golf course catalog ----
+  listGolfCourses(): GolfCourse[] {
+    return db.select().from(golfCourses).orderBy(asc(golfCourses.clubName)).all();
+  }
+  getGolfCourse(id: number): GolfCourse | undefined {
+    return db.select().from(golfCourses).where(eq(golfCourses.id, id)).get();
+  }
+  getGolfCourseByGcaId(gcaId: number): GolfCourse | undefined {
+    return db.select().from(golfCourses).where(eq(golfCourses.gcaId, gcaId)).get();
+  }
+  listGolfCourseTees(golfCourseId: number): GolfCourseTee[] {
+    return db.select().from(golfCourseTees).where(eq(golfCourseTees.golfCourseId, golfCourseId)).all();
+  }
+  getGolfCourseTee(id: number): GolfCourseTee | undefined {
+    return db.select().from(golfCourseTees).where(eq(golfCourseTees.id, id)).get();
+  }
+  listGolfCourseHoles(teeId: number): GolfCourseHole[] {
+    return db.select().from(golfCourseHoles)
+      .where(eq(golfCourseHoles.teeId, teeId))
+      .orderBy(asc(golfCourseHoles.holeNumber)).all();
+  }
+
+  /** Import a course payload returned by GolfCourseAPI (`GET /v1/courses/{id}`).
+   *  Idempotent: re-importing the same gca_id replaces tees + holes for that course. */
+  importGolfCourse(payload: GolfCourseApiCourse): GolfCourse {
+    return sqlite.transaction(() => {
+      const existing = this.getGolfCourseByGcaId(payload.id);
+      const loc = payload.location || {};
+      const courseRow = {
+        gcaId: payload.id,
+        clubName: payload.club_name,
+        courseName: payload.course_name,
+        address: loc.address ?? null,
+        city: loc.city ?? null,
+        state: loc.state ?? null,
+        country: loc.country ?? null,
+        latitude: loc.latitude ?? null,
+        longitude: loc.longitude ?? null,
+        importedAt: Date.now(),
+      };
+      let savedId: number;
+      if (existing) {
+        db.update(golfCourses).set(courseRow).where(eq(golfCourses.id, existing.id)).run();
+        savedId = existing.id;
+        // wipe old tees/holes
+        const oldTees = db.select().from(golfCourseTees).where(eq(golfCourseTees.golfCourseId, savedId)).all();
+        for (const t of oldTees) {
+          db.delete(golfCourseHoles).where(eq(golfCourseHoles.teeId, t.id)).run();
+        }
+        db.delete(golfCourseTees).where(eq(golfCourseTees.golfCourseId, savedId)).run();
+      } else {
+        const inserted = db.insert(golfCourses).values(courseRow).returning().get();
+        savedId = inserted.id;
+      }
+      const tees = payload.tees || {};
+      for (const gender of ["male", "female"] as const) {
+        const arr = tees[gender] || [];
+        for (const t of arr) {
+          const teeInsert = db.insert(golfCourseTees).values({
+            golfCourseId: savedId,
+            gender,
+            teeName: t.tee_name ?? "Unnamed",
+            courseRating: t.course_rating ?? null,
+            slopeRating: t.slope_rating ?? null,
+            bogeyRating: t.bogey_rating ?? null,
+            totalYards: t.total_yards ?? null,
+            totalMeters: t.total_meters ?? null,
+            numberOfHoles: t.number_of_holes ?? null,
+            parTotal: t.par_total ?? null,
+            frontCourseRating: t.front_course_rating ?? null,
+            frontSlopeRating: t.front_slope_rating ?? null,
+            frontBogeyRating: t.front_bogey_rating ?? null,
+            backCourseRating: t.back_course_rating ?? null,
+            backSlopeRating: t.back_slope_rating ?? null,
+            backBogeyRating: t.back_bogey_rating ?? null,
+          }).returning().get();
+          const teeId = teeInsert.id;
+          const holesArr = t.holes || [];
+          holesArr.forEach((h, i) => {
+            db.insert(golfCourseHoles).values({
+              teeId,
+              holeNumber: i + 1,
+              par: h.par ?? 4,
+              yardage: h.yardage ?? null,
+              handicap: h.handicap ?? null,
+            }).run();
+          });
+        }
+      }
+      return this.getGolfCourse(savedId)!;
+    })();
+  }
+
+  /** Apply a 9-hole slice of a catalog tee onto an existing league `courses` row.
+   *  Updates name/rating/slope on the layout, then upserts its 9 holes from
+   *  catalog hole [startHole .. startHole+8]. Re-ranks handicaps within the 9
+   *  to a 1..9 stroke index (since the catalog stores 1..18). */
+  applyCatalogTeeToLayout(args: {
+    layoutCourseId: number;
+    catalogCourseId: number;
+    teeId: number;
+    startHole: number; // 1 for front, 10 for back, etc.
+  }): { updatedHoles: number } {
+    return sqlite.transaction(() => {
+      const layout = this.getCourse(args.layoutCourseId);
+      if (!layout) throw new Error("Layout course not found");
+      const catalog = this.getGolfCourse(args.catalogCourseId);
+      if (!catalog) throw new Error("Catalog course not found");
+      const tee = this.getGolfCourseTee(args.teeId);
+      if (!tee || tee.golfCourseId !== catalog.id) throw new Error("Tee not found on this catalog course");
+      const allHoles = this.listGolfCourseHoles(tee.id);
+      const slice = allHoles.filter(h => h.holeNumber >= args.startHole && h.holeNumber < args.startHole + 9);
+      if (slice.length < 9) throw new Error(`Catalog tee only has ${allHoles.length} holes; cannot start at ${args.startHole}`);
+
+      // Pick 9-hole rating/slope: front/back if matching the slice, else fall back to full course rating.
+      let nineRating: number | null = null;
+      let nineSlope: number | null = null;
+      if (args.startHole === 1) {
+        nineRating = tee.frontCourseRating ?? (tee.courseRating != null ? tee.courseRating / 2 : null);
+        nineSlope = tee.frontSlopeRating ?? tee.slopeRating ?? null;
+      } else if (args.startHole === 10) {
+        nineRating = tee.backCourseRating ?? (tee.courseRating != null ? tee.courseRating / 2 : null);
+        nineSlope = tee.backSlopeRating ?? tee.slopeRating ?? null;
+      } else {
+        nineRating = tee.courseRating != null ? tee.courseRating / 2 : null;
+        nineSlope = tee.slopeRating ?? null;
+      }
+
+      // Re-rank stroke indexes within the slice from the catalog handicaps (lower = harder).
+      // If a hole has no handicap value, fall back to its position in the slice.
+      const ranked = slice
+        .map((h, idx) => ({ h, idx, hcp: h.handicap ?? 100 + idx }))
+        .sort((a, b) => a.hcp - b.hcp)
+        .map((row, rank) => ({ holeNumber: row.h.holeNumber, strokeIndex: rank + 1 }));
+      const siByHole: Record<number, number> = {};
+      for (const r of ranked) siByHole[r.holeNumber] = r.strokeIndex;
+
+      // Update layout course metadata (name reflects catalog choice).
+      const layoutLabel = layout.layout === "front" ? "Front" :
+                          layout.layout === "back" ? "Back" : "Custom";
+      const newName = `${catalog.clubName} — ${catalog.courseName} (${tee.teeName}) — ${layoutLabel} 9`;
+      db.update(courses).set({
+        name: newName,
+        courseRating: nineRating,
+        slope: nineSlope,
+      }).where(eq(courses.id, args.layoutCourseId)).run();
+
+      // Upsert the 9 holes into the layout (holeNumber 1..9 within the layout).
+      let i = 1;
+      for (const h of slice) {
+        this.upsertHole({
+          courseId: args.layoutCourseId,
+          holeNumber: i,
+          par: h.par,
+          strokeIndex: siByHole[h.holeNumber] ?? i,
+          yards: h.yardage ?? null,
+        });
+        i++;
+      }
+
+      // Recompute affected weeks (handicap differentials depend on rating/slope/par).
+      const affected = this.listWeeks().filter(w => w.courseId === args.layoutCourseId);
+      if (affected.length > 0) {
+        const earliest = affected.reduce((a, b) => a.weekNumber < b.weekNumber ? a : b);
+        this.recomputeFromWeek(earliest.id);
+      }
+      return { updatedHoles: 9 };
+    })();
   }
 
   // =====================================================

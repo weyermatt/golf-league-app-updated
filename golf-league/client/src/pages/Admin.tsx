@@ -13,6 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Trash2, KeyRound, Save, UserPlus } from "lucide-react";
+import { CatalogAdmin } from "@/components/CatalogAdmin";
 
 export default function Admin() {
   const { user } = useAuth();
@@ -27,6 +28,7 @@ export default function Admin() {
           <TabsTrigger value="players" data-testid="tab-players">Players</TabsTrigger>
           <TabsTrigger value="teams" data-testid="tab-teams">Teams</TabsTrigger>
           <TabsTrigger value="course" data-testid="tab-course">Course</TabsTrigger>
+          <TabsTrigger value="catalog" data-testid="tab-catalog">Catalog</TabsTrigger>
           <TabsTrigger value="schedule" data-testid="tab-schedule">Schedule</TabsTrigger>
           <TabsTrigger value="config" data-testid="tab-config">Points / Hcp</TabsTrigger>
           <TabsTrigger value="bulk" data-testid="tab-bulk">Bulk Import</TabsTrigger>
@@ -36,6 +38,7 @@ export default function Admin() {
           <TabsContent value="players"><PlayersAdmin /></TabsContent>
           <TabsContent value="teams"><TeamsAdmin /></TabsContent>
           <TabsContent value="course"><CourseAdmin /></TabsContent>
+          <TabsContent value="catalog"><CatalogAdmin /></TabsContent>
           <TabsContent value="schedule"><ScheduleAdmin /></TabsContent>
           <TabsContent value="config"><ConfigAdmin /></TabsContent>
           <TabsContent value="bulk"><BulkImportAdmin /></TabsContent>
