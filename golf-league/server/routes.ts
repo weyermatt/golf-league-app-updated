@@ -301,10 +301,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     if (!gcaId) return res.status(400).json({ message: "Missing gcaId" });
     try {
       const payload = await gcaGetCourse(gcaId);
+      console.log(
+        `[catalog] import gcaId=${gcaId} payload.id=${payload.id} ` +
+        `club="${payload.club_name}" course="${payload.course_name}" ` +
+        `tees=${(payload.tees?.male?.length ?? 0) + (payload.tees?.female?.length ?? 0)}`,
+      );
       const saved = storage.importGolfCourse(payload);
       res.json(saved);
     } catch (err: any) {
-      console.error(`[catalog] import failed for gcaId=${gcaId}:`, err?.message || err);
+      console.error(`[catalog] import failed for gcaId=${gcaId}:`, err?.stack || err?.message || err);
       res.status(502).json({ message: err?.message || "Import failed" });
     }
   });

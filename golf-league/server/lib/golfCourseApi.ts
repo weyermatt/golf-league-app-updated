@@ -91,21 +91,39 @@ export function searchCourses(query: string): Promise<GolfCourseApiSearchResult>
 
 export async function getCourse(id: number): Promise<GolfCourseApiCourse> {
   // The API documentation shows the course as the top-level object
-  // (`{ id, club_name, ... }`), but be defensive in case it's ever wrapped
-  // (`{ course: { ... } }`) — fall back gracefully and surface a clear error
-  // when we can't find an `id` on the payload.
+  // (`{ id, club_name, ... }`), but real responses sometimes wrap it
+  // (`{ course: { ... } }` or similar). Try a few common shapes, then fall
+  // back to the requested id if the payload is otherwise valid but missing
+  // its own id field.
   const raw = await call<any>(`/courses/${id}`);
   let payload: any = raw;
-  if (raw && typeof raw === "object" && raw.course && raw.course.id != null) {
-    payload = raw.course;
+  if (raw && typeof raw === "object") {
+    for (const key of ["course", "data", "result"]) {
+      const inner = raw[key];
+      if (inner && typeof inner === "object" && (inner.club_name || inner.course_name)) {
+        payload = inner;
+        break;
+      }
+    }
   }
-  if (!payload || payload.id == null || !payload.club_name || !payload.course_name) {
+  if (!payload || typeof payload !== "object" || !payload.club_name || !payload.course_name) {
     throw new Error(
       `GolfCourseAPI returned an unexpected payload for course ${id}. ` +
-      `Response keys: [${Object.keys(raw || {}).join(", ")}]`,
+      `Top-level keys: [${Object.keys(raw || {}).join(", ")}]`,
     );
   }
-  // Coerce id to a number in case the API serialises it as a string.
-  payload.id = Number(payload.id);
+  // The upstream sometimes omits `id` on the course object even when it's a
+  // valid response — we already know the id we asked for, so use that as the
+  // canonical gca id rather than trusting the payload echo. Otherwise coerce
+  // to a finite integer; reject anything that won't survive a NOT NULL int
+  // column (NaN, "abc", objects, etc).
+  const candidate = payload.id ?? id;
+  const numericId = Number(candidate);
+  if (!Number.isFinite(numericId) || !Number.isInteger(numericId)) {
+    throw new Error(
+      `GolfCourseAPI course ${id} has non-numeric id (${JSON.stringify(payload.id)})`,
+    );
+  }
+  payload.id = numericId;
   return payload as GolfCourseApiCourse;
 }
