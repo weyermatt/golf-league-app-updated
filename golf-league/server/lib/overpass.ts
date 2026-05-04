@@ -8,7 +8,20 @@
 // Coverage of municipal/local courses in the US is good but not perfect. When
 // no greens are found, the caller should fall back to manual pin-drop.
 
-const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
+const OVERPASS_ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+];
+
+// Apache in front of overpass-api.de content-negotiates 406 unless we send a
+// real User-Agent and an explicit Accept header — Node's default UA gets
+// rejected by some firewall rules.
+const REQUEST_HEADERS: Record<string, string> = {
+  "Content-Type": "application/x-www-form-urlencoded",
+  "Accept": "application/json",
+  "User-Agent": "tnt-golf-league/1.0 (+https://github.com/weyermatt/golf-league-app-updated)",
+};
 
 export type LatLng = { lat: number; lng: number };
 
@@ -82,18 +95,41 @@ export async function fetchGolfFeatures(
     out body geom;
   `.trim();
 
-  const res = await fetch(OVERPASS_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ data: query }).toString(),
-  });
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(`Overpass ${res.status}: ${txt || res.statusText}`);
-  }
-  const data = (await res.json()) as OverpassResponse & {
+  const body = new URLSearchParams({ data: query }).toString();
+  let lastErr: string | null = null;
+  let data: (OverpassResponse & {
     elements: Array<OverpassWay & { geometry?: Array<{ lat: number; lon: number }> }>;
-  };
+  }) | null = null;
+  for (const url of OVERPASS_ENDPOINTS) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: REQUEST_HEADERS,
+        body,
+      });
+      if (!res.ok) {
+        // 4xx (apart from 429 rate-limit) is the same error on every mirror;
+        // fall through and let the user see it. 5xx and 429 are worth retrying
+        // on the next mirror.
+        const txt = await res.text().catch(() => "");
+        const snippet = (txt || res.statusText).slice(0, 200);
+        lastErr = `Overpass ${res.status} from ${new URL(url).host}: ${snippet}`;
+        if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
+          throw new Error(lastErr);
+        }
+        continue;
+      }
+      data = await res.json();
+      break;
+    } catch (err: any) {
+      // Network-level error — try the next mirror.
+      lastErr = err?.message || String(err);
+      if (lastErr?.startsWith("Overpass ")) throw err;
+    }
+  }
+  if (!data) {
+    throw new Error(lastErr || "Overpass: all endpoints unreachable");
+  }
 
   const greens: OsmGreen[] = [];
   const tees: OsmTee[] = [];
