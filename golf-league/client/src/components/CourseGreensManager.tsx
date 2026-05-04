@@ -8,9 +8,10 @@ import { MapContainer, TileLayer, Polygon, CircleMarker, Tooltip } from "react-l
 import L from "leaflet";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { Loader2, RefreshCw, Trash2, Link as LinkIcon } from "lucide-react";
 
 const ESRI_SAT_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
 const ESRI_ATTR = "Tiles &copy; Esri";
@@ -44,6 +45,90 @@ const HOLE_COLORS = [
 function colorFor(holeNumber: number | null): string {
   if (holeNumber == null) return "#94a3b8"; // slate-400 for unassigned
   return HOLE_COLORS[(holeNumber - 1) % HOLE_COLORS.length];
+}
+
+function LinkToLayoutPanel({ catalogCourseId }: { catalogCourseId: number }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { data: layouts } = useQuery<{ id: number; name: string; layout: string; catalogCourseId: number | null; startHole: number | null }[]>({
+    queryKey: ["/api/courses"],
+  });
+  const linked = (layouts || []).filter(l => l.catalogCourseId === catalogCourseId);
+  const unlinked = (layouts || []).filter(l => l.catalogCourseId !== catalogCourseId);
+  const [layoutId, setLayoutId] = useState("");
+  const [startHole, setStartHole] = useState("1");
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    if (!layoutId) return;
+    setSaving(true);
+    try {
+      await apiRequest("POST", "/api/catalog/link", {
+        layoutCourseId: Number(layoutId),
+        catalogCourseId,
+        startHole: Number(startHole),
+      });
+      qc.invalidateQueries({ queryKey: ["/api/courses"] });
+      qc.invalidateQueries({ queryKey: ["/api/weeks"] });
+      toast({ title: "Layout linked" });
+      setLayoutId("");
+    } catch (err: any) {
+      toast({ title: "Link failed", description: err.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-border bg-secondary/30 p-3 space-y-3">
+      <div className="flex items-center gap-2 text-xs font-medium">
+        <LinkIcon className="h-3.5 w-3.5" />
+        Linked to league layouts
+      </div>
+      {linked.length === 0 ? (
+        <div className="text-xs text-muted-foreground">No links yet — pick a layout below to enable GPS for that 9.</div>
+      ) : (
+        <ul className="text-xs space-y-1">
+          {linked.map(l => (
+            <li key={l.id} className="text-muted-foreground">
+              <span className="font-medium text-foreground">{l.layout === "front" ? "Front 9" : l.layout === "back" ? "Back 9" : l.layout}</span>
+              {" — "}{l.name}{" "}<span className="text-muted-foreground">(starts at hole {l.startHole ?? 1})</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="grid sm:grid-cols-3 gap-2 items-end">
+        <div>
+          <Label className="text-xs">Layout to link</Label>
+          <Select value={layoutId} onValueChange={setLayoutId}>
+            <SelectTrigger className="h-9"><SelectValue placeholder="Pick a 9-hole layout" /></SelectTrigger>
+            <SelectContent>
+              {unlinked.length === 0 && <SelectItem value="none" disabled>All layouts already linked</SelectItem>}
+              {unlinked.map(l => (
+                <SelectItem key={l.id} value={String(l.id)}>
+                  {l.layout === "front" ? "Front 9" : l.layout === "back" ? "Back 9" : l.layout} — {l.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label className="text-xs">Start hole</Label>
+          <Select value={startHole} onValueChange={setStartHole}>
+            <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="1">1 (Front 9)</SelectItem>
+              <SelectItem value="10">10 (Back 9)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <Button onClick={submit} disabled={!layoutId || saving} className="h-9">
+          {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <LinkIcon className="h-4 w-4 mr-2" />}
+          Link
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 export function CourseGreensManager({ course }: { course: { id: number; latitude: number | null; longitude: number | null; clubName: string } }) {
@@ -115,6 +200,7 @@ export function CourseGreensManager({ course }: { course: { id: number; latitude
 
   return (
     <div className="space-y-3">
+      <LinkToLayoutPanel catalogCourseId={course.id} />
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="text-xs text-muted-foreground">
           {greens.length === 0

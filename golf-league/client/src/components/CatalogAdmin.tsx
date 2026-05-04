@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Search, Download, Wand2, MapPin, Loader2, Satellite } from "lucide-react";
+import { Search, Download, Wand2, MapPin, Loader2, Satellite, PlusCircle } from "lucide-react";
 import { CourseGreensManager } from "./CourseGreensManager";
 
 type SearchHit = {
@@ -55,8 +55,120 @@ export function CatalogAdmin() {
         </CardHeader>
       </Card>
       <SearchPanel />
+      <ManualAddPanel />
       <ImportedCoursesPanel />
     </div>
+  );
+}
+
+function ManualAddPanel() {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [clubName, setClubName] = useState("");
+  const [courseName, setCourseName] = useState("");
+  const [city, setCity] = useState("");
+  const [state, setState] = useState("");
+  const [lat, setLat] = useState("");
+  const [lng, setLng] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const erieFill = () => {
+    setClubName("The Links at Erie Village");
+    setCourseName("Main Course");
+    setCity("East Syracuse");
+    setState("NY");
+    setLat("43.083");
+    setLng("-76.043");
+  };
+
+  const submit = async () => {
+    if (!clubName || !courseName || !lat || !lng) {
+      toast({ title: "Club, course, latitude and longitude are required", variant: "destructive" });
+      return;
+    }
+    const latNum = parseFloat(lat);
+    const lngNum = parseFloat(lng);
+    if (Number.isNaN(latNum) || Number.isNaN(lngNum)) {
+      toast({ title: "Latitude / longitude must be numbers", variant: "destructive" });
+      return;
+    }
+    setSaving(true);
+    try {
+      await apiRequest("POST", "/api/catalog/manual", {
+        clubName, courseName,
+        city: city || null,
+        state: state || null,
+        country: "United States",
+        latitude: latNum,
+        longitude: lngNum,
+      });
+      qc.invalidateQueries({ queryKey: ["/api/catalog/courses"] });
+      toast({ title: "Course added — scroll down to find it under Imported Courses." });
+      setOpen(false);
+      setClubName(""); setCourseName(""); setCity(""); setState(""); setLat(""); setLng("");
+    } catch (err: any) {
+      toast({ title: "Add failed", description: err.message, variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <CardTitle className="text-sm">Course Missing? Add It Manually</CardTitle>
+            <CardDescription>For courses GolfCourseAPI doesn't have. Stores name + lat/lng so OSM can pull greens for the GPS feature.</CardDescription>
+          </div>
+          <Button size="sm" variant="outline" onClick={() => setOpen(o => !o)}>
+            <PlusCircle className="h-4 w-4 mr-2" />
+            {open ? "Cancel" : "Add manually"}
+          </Button>
+        </div>
+      </CardHeader>
+      {open && (
+        <CardContent className="space-y-3">
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div>
+              <Label>Club name</Label>
+              <Input value={clubName} onChange={e => setClubName(e.target.value)} placeholder="The Links at Erie Village" />
+            </div>
+            <div>
+              <Label>Course name</Label>
+              <Input value={courseName} onChange={e => setCourseName(e.target.value)} placeholder="Main Course" />
+            </div>
+            <div>
+              <Label>City</Label>
+              <Input value={city} onChange={e => setCity(e.target.value)} placeholder="East Syracuse" />
+            </div>
+            <div>
+              <Label>State</Label>
+              <Input value={state} onChange={e => setState(e.target.value)} placeholder="NY" />
+            </div>
+            <div>
+              <Label>Latitude</Label>
+              <Input value={lat} onChange={e => setLat(e.target.value)} placeholder="43.083" />
+            </div>
+            <div>
+              <Label>Longitude</Label>
+              <Input value={lng} onChange={e => setLng(e.target.value)} placeholder="-76.043" />
+            </div>
+          </div>
+          <div className="text-xs text-muted-foreground">
+            Tip: get lat/lng by right-clicking the course on Google Maps and clicking the coordinates that appear at the top of the menu.
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={erieFill}>Pre-fill Erie Village</Button>
+            <Button onClick={submit} disabled={saving}>
+              {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <PlusCircle className="h-4 w-4 mr-2" />}
+              Add course
+            </Button>
+          </div>
+        </CardContent>
+      )}
+    </Card>
   );
 }
 

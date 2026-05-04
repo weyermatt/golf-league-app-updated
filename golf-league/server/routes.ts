@@ -231,6 +231,71 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ ...course, tees });
   });
 
+  // Manually create a catalog course (for courses missing from GolfCourseAPI).
+  // Stores just name + lat/lng — enough for OSM green lookups + GPS distances.
+  // Scorecard data is not required since admins can populate it via the
+  // existing CourseAdmin UI on the linked 9-hole layout (or via the Erie
+  // Village preset).
+  app.post("/api/catalog/manual", requireAdmin, (req, res) => {
+    const schema = z.object({
+      clubName: z.string().min(1),
+      courseName: z.string().min(1),
+      city: z.string().optional().nullable(),
+      state: z.string().optional().nullable(),
+      country: z.string().optional().nullable(),
+      address: z.string().optional().nullable(),
+      latitude: z.number(),
+      longitude: z.number(),
+    });
+    const data = schema.parse(req.body);
+    // Use a synthetic gca_id (negative) so it doesn't collide with real ones.
+    // We pick the next available negative id deterministically.
+    const all = storage.listGolfCourses();
+    const minSynthetic = all
+      .map(c => c.gcaId)
+      .filter(id => id < 0)
+      .reduce((m, v) => Math.min(m, v), 0);
+    const syntheticId = minSynthetic - 1;
+    // Insert via the same upsert path as imported courses; importGolfCourse
+    // expects a GolfCourseApiCourse-shaped payload, so we hand-craft one.
+    const saved = storage.importGolfCourse({
+      id: syntheticId,
+      club_name: data.clubName,
+      course_name: data.courseName,
+      location: {
+        address: data.address ?? null,
+        city: data.city ?? null,
+        state: data.state ?? null,
+        country: data.country ?? null,
+        latitude: data.latitude,
+        longitude: data.longitude,
+      },
+      tees: { male: [], female: [] },
+    } as any);
+    res.json(saved);
+  });
+
+  // Link an existing 9-hole league layout to a catalog course without copying
+  // a tee's scorecard data. Useful when the layout's pars/SI/yards are already
+  // populated (e.g. from a preset) and we only need GPS data on the layout.
+  app.post("/api/catalog/link", requireAdmin, (req, res) => {
+    const schema = z.object({
+      layoutCourseId: z.number().int(),
+      catalogCourseId: z.number().int(),
+      startHole: z.number().int().min(1).max(10),
+    });
+    const args = schema.parse(req.body);
+    const layout = storage.getCourse(args.layoutCourseId);
+    if (!layout) return res.status(404).json({ message: "Layout not found" });
+    const catalog = storage.getGolfCourse(args.catalogCourseId);
+    if (!catalog) return res.status(404).json({ message: "Catalog course not found" });
+    storage.updateCourse(args.layoutCourseId, {
+      catalogCourseId: args.catalogCourseId,
+      startHole: args.startHole,
+    });
+    res.json({ ok: true });
+  });
+
   app.post("/api/catalog/import", requireAdmin, async (req, res) => {
     const gcaId = Number(req.body?.gcaId);
     if (!gcaId) return res.status(400).json({ message: "Missing gcaId" });
