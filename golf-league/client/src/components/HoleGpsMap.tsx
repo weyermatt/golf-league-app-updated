@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { MapContainer, TileLayer, Polygon, CircleMarker, Marker, Tooltip, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, Polygon, Polyline, CircleMarker, Marker, Tooltip, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import type { LatLng } from "@/lib/geo";
-import { distancesToGreen } from "@/lib/geo";
+import { distMeters, metersToYards, distancesToGreen } from "@/lib/geo";
+import { Crosshair, Locate, X } from "lucide-react";
 
 type HoleGeo = {
   green: { lat: number | null; lng: number | null; polygon: LatLng[] | null } | null;
@@ -19,7 +20,6 @@ type Props = {
 const ESRI_SAT_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
 const ESRI_ATTR = "Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community";
 
-// FitBounds helper: re-fits the map whenever the green/tee/player set changes.
 function FitToTargets({ targets }: { targets: LatLng[] }) {
   const map = useMap();
   useEffect(() => {
@@ -50,10 +50,41 @@ function GeolocationWatcher({ onPos }: { onPos: (pos: LatLng | null, err: string
   return null;
 }
 
+function MapClickHandler({ onClick }: { onClick: (latlng: LatLng) => void }) {
+  useMapEvents({
+    click(e) {
+      onClick({ lat: e.latlng.lat, lng: e.latlng.lng });
+    },
+  });
+  return null;
+}
+
+const midpoint = (a: LatLng, b: LatLng): LatLng => ({
+  lat: (a.lat + b.lat) / 2,
+  lng: (a.lng + b.lng) / 2,
+});
+
+function distanceLabelIcon(yards: number) {
+  return L.divIcon({
+    html: `<div style="background:rgba(0,0,0,0.65);color:#fff;font-weight:700;font-size:13px;padding:2px 8px;border-radius:6px;white-space:nowrap;text-shadow:0 1px 2px rgba(0,0,0,0.6);box-shadow:0 1px 3px rgba(0,0,0,0.4);">${Math.round(yards)}</div>`,
+    className: "",
+    iconSize: [40, 22],
+    iconAnchor: [20, 11],
+  });
+}
+
+const aimIcon = L.divIcon({
+  html: `<div style="width:28px;height:28px;border-radius:9999px;border:3px solid #fff;background:rgba(255,255,255,0.15);box-shadow:0 0 0 2px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;"><div style="width:6px;height:6px;border-radius:9999px;background:#fff;"></div></div>`,
+  className: "",
+  iconSize: [28, 28],
+  iconAnchor: [14, 14],
+});
+
 export function HoleGpsMap({ hole, height = 320, followUser = true }: Props) {
   const [player, setPlayer] = useState<LatLng | null>(null);
   const [geoErr, setGeoErr] = useState<string | null>(null);
-  const fittedRef = useRef(false);
+  const [aim, setAim] = useState<LatLng | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
 
   const greenLatLng: LatLng | null = hole?.green && hole.green.lat != null && hole.green.lng != null
     ? { lat: hole.green.lat, lng: hole.green.lng } : null;
@@ -64,7 +95,18 @@ export function HoleGpsMap({ hole, height = 320, followUser = true }: Props) {
     return distancesToGreen(player, polygon, greenLatLng);
   }, [player, polygon, greenLatLng]);
 
-  // First-time fit targets — don't keep re-fitting after user pans/zooms.
+  // Aim-line distances: player → aim, aim → green center, in yards.
+  const aimDists = useMemo(() => {
+    if (!aim || !player || !greenLatLng) return null;
+    return {
+      playerToAim: metersToYards(distMeters(player, aim)),
+      aimToGreen: metersToYards(distMeters(aim, greenLatLng)),
+    };
+  }, [aim, player, greenLatLng]);
+
+  // Clear aim when the hole changes so we don't carry a stale target across.
+  useEffect(() => { setAim(null); }, [greenLatLng?.lat, greenLatLng?.lng]);
+
   const targets = useMemo<LatLng[]>(() => {
     const t: LatLng[] = [];
     if (greenLatLng) t.push(greenLatLng);
@@ -94,10 +136,16 @@ export function HoleGpsMap({ hole, height = 320, followUser = true }: Props) {
     );
   }
 
+  const recenter = () => {
+    if (!mapRef.current || !player) return;
+    mapRef.current.setView([player.lat, player.lng], mapRef.current.getZoom());
+  };
+
   return (
     <div className="space-y-2">
-      <div className="rounded-xl overflow-hidden border border-border" style={{ height }}>
+      <div className="relative rounded-xl overflow-hidden border border-border" style={{ height }}>
         <MapContainer
+          ref={mapRef as any}
           center={[greenLatLng.lat, greenLatLng.lng]}
           zoom={17}
           scrollWheelZoom
@@ -122,18 +170,87 @@ export function HoleGpsMap({ hole, height = 320, followUser = true }: Props) {
             </CircleMarker>
           )}
           {player && (
+            <CircleMarker
+              center={[player.lat, player.lng]}
+              radius={8}
+              pathOptions={{ color: "#fff", weight: 2, fillColor: "#3b82f6", fillOpacity: 1 }}
+            >
+              <Tooltip permanent={false}>You</Tooltip>
+            </CircleMarker>
+          )}
+          {aim && player && greenLatLng && (
             <>
-              <CircleMarker
-                center={[player.lat, player.lng]}
-                radius={8}
-                pathOptions={{ color: "#fff", weight: 2, fillColor: "#3b82f6", fillOpacity: 1 }}
-              >
-                <Tooltip permanent={false}>You</Tooltip>
-              </CircleMarker>
+              <Polyline
+                positions={[[player.lat, player.lng], [aim.lat, aim.lng], [greenLatLng.lat, greenLatLng.lng]]}
+                pathOptions={{ color: "#fff", weight: 2, opacity: 0.85, dashArray: "4 6" }}
+              />
+              <Marker position={[aim.lat, aim.lng]} icon={aimIcon} interactive={false} />
+              {aimDists && (
+                <>
+                  <Marker
+                    position={[midpoint(player, aim).lat, midpoint(player, aim).lng]}
+                    icon={distanceLabelIcon(aimDists.playerToAim)}
+                    interactive={false}
+                  />
+                  <Marker
+                    position={[midpoint(aim, greenLatLng).lat, midpoint(aim, greenLatLng).lng]}
+                    icon={distanceLabelIcon(aimDists.aimToGreen)}
+                    interactive={false}
+                  />
+                </>
+              )}
             </>
           )}
           <FitToTargets targets={targets} />
+          <MapClickHandler onClick={pt => setAim(pt)} />
         </MapContainer>
+
+        {/* Hero "TO CENTER" badge */}
+        <div className="absolute top-2 right-2 z-[1000] pointer-events-none">
+          <div className="bg-black/70 backdrop-blur text-white rounded-2xl px-3 py-2 shadow-lg text-right min-w-[88px]">
+            <div className="text-[9px] tracking-widest font-semibold opacity-80">TO CENTER</div>
+            <div className="text-3xl font-bold leading-none tabular-nums">
+              {dists.center == null ? "—" : Math.round(dists.center)}
+            </div>
+            <div className="text-[9px] tracking-widest opacity-80">YARDS</div>
+            {(dists.front != null || dists.back != null) && (
+              <div className="mt-1 flex justify-end gap-2 text-[10px] tabular-nums opacity-90">
+                <span>F {dists.front == null ? "—" : Math.round(dists.front)}</span>
+                <span>B {dists.back == null ? "—" : Math.round(dists.back)}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Aim hint / clear */}
+        <div className="absolute top-2 left-2 z-[1000] flex flex-col gap-2">
+          {aim ? (
+            <button
+              type="button"
+              onClick={() => setAim(null)}
+              className="pointer-events-auto bg-black/70 backdrop-blur text-white text-xs font-medium rounded-full px-3 py-1.5 shadow-lg flex items-center gap-1 hover:bg-black/80"
+              data-testid="button-clear-aim"
+            >
+              <X className="h-3 w-3" /> Clear aim
+            </button>
+          ) : (
+            <div className="pointer-events-none bg-black/55 backdrop-blur text-white/90 text-[11px] rounded-full px-3 py-1.5 shadow-lg flex items-center gap-1.5">
+              <Crosshair className="h-3 w-3" /> Tap map to aim
+            </div>
+          )}
+        </div>
+
+        {/* Re-center */}
+        {player && (
+          <button
+            type="button"
+            onClick={recenter}
+            className="absolute bottom-2 left-1/2 -translate-x-1/2 z-[1000] bg-black/70 backdrop-blur text-white text-xs font-medium rounded-full px-3 py-1.5 shadow-lg flex items-center gap-1.5 hover:bg-black/80"
+            data-testid="button-recenter"
+          >
+            <Locate className="h-3.5 w-3.5" /> Re-center
+          </button>
+        )}
       </div>
 
       <GeolocationWatcher
@@ -146,24 +263,6 @@ export function HoleGpsMap({ hole, height = 320, followUser = true }: Props) {
       {geoErr && (
         <div className="text-xs text-amber-600 dark:text-amber-400">{geoErr} GPS distances will appear once your location is available.</div>
       )}
-
-      <div className="grid grid-cols-3 gap-2 text-center">
-        <DistTile label="Front" yards={dists.front} />
-        <DistTile label="Center" yards={dists.center} highlight />
-        <DistTile label="Back" yards={dists.back} />
-      </div>
-    </div>
-  );
-}
-
-function DistTile({ label, yards, highlight }: { label: string; yards: number | null; highlight?: boolean }) {
-  return (
-    <div className={`rounded-lg border px-3 py-2 ${highlight ? "bg-primary/10 border-primary/40" : "bg-secondary/40 border-border"}`}>
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="text-2xl font-bold tabular-nums">
-        {yards == null ? "—" : Math.round(yards)}
-      </div>
-      <div className="text-[10px] text-muted-foreground">yards</div>
     </div>
   );
 }
