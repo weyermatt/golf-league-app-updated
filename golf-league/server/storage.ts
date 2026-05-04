@@ -520,6 +520,9 @@ export class Storage {
   /** Import a course payload returned by GolfCourseAPI (`GET /v1/courses/{id}`).
    *  Idempotent: re-importing the same gca_id replaces tees + holes for that course. */
   importGolfCourse(payload: GolfCourseApiCourse): GolfCourse {
+    if (payload == null || payload.id == null || !payload.club_name || !payload.course_name) {
+      throw new Error("Cannot import course: missing id, club_name or course_name on payload");
+    }
     return sqlite.transaction(() => {
       const existing = this.getGolfCourseByGcaId(payload.id);
       const loc = payload.location || {};

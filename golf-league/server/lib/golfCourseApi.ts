@@ -89,6 +89,23 @@ export function searchCourses(query: string): Promise<GolfCourseApiSearchResult>
   return call<GolfCourseApiSearchResult>(`/search?search_query=${q}`);
 }
 
-export function getCourse(id: number): Promise<GolfCourseApiCourse> {
-  return call<GolfCourseApiCourse>(`/courses/${id}`);
+export async function getCourse(id: number): Promise<GolfCourseApiCourse> {
+  // The API documentation shows the course as the top-level object
+  // (`{ id, club_name, ... }`), but be defensive in case it's ever wrapped
+  // (`{ course: { ... } }`) — fall back gracefully and surface a clear error
+  // when we can't find an `id` on the payload.
+  const raw = await call<any>(`/courses/${id}`);
+  let payload: any = raw;
+  if (raw && typeof raw === "object" && raw.course && raw.course.id != null) {
+    payload = raw.course;
+  }
+  if (!payload || payload.id == null || !payload.club_name || !payload.course_name) {
+    throw new Error(
+      `GolfCourseAPI returned an unexpected payload for course ${id}. ` +
+      `Response keys: [${Object.keys(raw || {}).join(", ")}]`,
+    );
+  }
+  // Coerce id to a number in case the API serialises it as a string.
+  payload.id = Number(payload.id);
+  return payload as GolfCourseApiCourse;
 }

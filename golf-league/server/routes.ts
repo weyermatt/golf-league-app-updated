@@ -304,6 +304,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const saved = storage.importGolfCourse(payload);
       res.json(saved);
     } catch (err: any) {
+      console.error(`[catalog] import failed for gcaId=${gcaId}:`, err?.message || err);
       res.status(502).json({ message: err?.message || "Import failed" });
     }
   });
