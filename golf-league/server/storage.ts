@@ -1,14 +1,14 @@
 import {
   users, players, teams, courses, holes, weeks, matchups, scores, skins,
   handicapHistory, settings, sessions, teamScores, teamHandicapHistory,
-  golfCourses, golfCourseTees, golfCourseHoles,
+  golfCourses, golfCourseTees, golfCourseHoles, courseHoleGeo,
 } from "@shared/schema";
 import type {
   User, InsertUser, Player, InsertPlayer, Team, InsertTeam,
   Course, InsertCourse, Hole, InsertHole, Week, InsertWeek,
   Matchup, InsertMatchup, Score, InsertScore, Skin, HandicapHistory, Settings,
   TeamScore, InsertTeamScore, TeamHandicapHistory,
-  GolfCourse, GolfCourseTee, GolfCourseHole,
+  GolfCourse, GolfCourseTee, GolfCourseHole, CourseHoleGeo,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
@@ -183,7 +183,32 @@ function ensureSchema() {
       handicap INTEGER
     );
     CREATE UNIQUE INDEX IF NOT EXISTS uniq_tee_hole ON golf_course_holes(tee_id, hole_number);
+    CREATE TABLE IF NOT EXISTS course_hole_geo (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      golf_course_id INTEGER NOT NULL,
+      hole_number INTEGER,
+      green_lat REAL,
+      green_lng REAL,
+      green_polygon_json TEXT,
+      tee_lat REAL,
+      tee_lng REAL,
+      source TEXT NOT NULL DEFAULT 'osm',
+      osm_way_id INTEGER,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_geo_course ON course_hole_geo(golf_course_id);
   `);
+
+  // Idempotent ALTERs for catalog link on courses (added in Phase 1.5).
+  try {
+    const cols = sqlite.prepare(`PRAGMA table_info(courses)`).all() as { name: string }[];
+    if (!cols.some(c => c.name === "catalog_course_id")) {
+      sqlite.exec(`ALTER TABLE courses ADD COLUMN catalog_course_id INTEGER`);
+    }
+    if (!cols.some(c => c.name === "start_hole")) {
+      sqlite.exec(`ALTER TABLE courses ADD COLUMN start_hole INTEGER`);
+    }
+  } catch { /* ignore */ }
 
   // Idempotent ALTERs for upgrades from older DBs.
   // teams.current_handicap
@@ -563,6 +588,99 @@ export class Storage {
     })();
   }
 
+  // ---- course hole geo ----
+  listCourseHoleGeo(golfCourseId: number): CourseHoleGeo[] {
+    return db.select().from(courseHoleGeo)
+      .where(eq(courseHoleGeo.golfCourseId, golfCourseId))
+      .orderBy(asc(courseHoleGeo.holeNumber)).all();
+  }
+  getCourseHoleGeoForHole(golfCourseId: number, holeNumber: number): CourseHoleGeo | undefined {
+    return db.select().from(courseHoleGeo)
+      .where(and(eq(courseHoleGeo.golfCourseId, golfCourseId), eq(courseHoleGeo.holeNumber, holeNumber)))
+      .get();
+  }
+  upsertCourseHoleGeo(row: {
+    golfCourseId: number;
+    holeNumber: number | null;
+    greenLat: number | null;
+    greenLng: number | null;
+    greenPolygonJson: string | null;
+    teeLat?: number | null;
+    teeLng?: number | null;
+    source: "osm" | "manual";
+    osmWayId?: number | null;
+  }): CourseHoleGeo {
+    // Dedup logic:
+    //   - osm: dedupe by osm_way_id within the same course
+    //   - manual: dedupe by (course, hole_number)
+    const now = Date.now();
+    let existing: CourseHoleGeo | undefined;
+    if (row.source === "osm" && row.osmWayId != null) {
+      existing = db.select().from(courseHoleGeo)
+        .where(and(eq(courseHoleGeo.golfCourseId, row.golfCourseId), eq(courseHoleGeo.osmWayId, row.osmWayId)))
+        .get();
+    } else if (row.holeNumber != null) {
+      existing = db.select().from(courseHoleGeo)
+        .where(and(eq(courseHoleGeo.golfCourseId, row.golfCourseId), eq(courseHoleGeo.holeNumber, row.holeNumber)))
+        .get();
+    }
+    if (existing) {
+      return db.update(courseHoleGeo).set({
+        holeNumber: row.holeNumber,
+        greenLat: row.greenLat,
+        greenLng: row.greenLng,
+        greenPolygonJson: row.greenPolygonJson,
+        teeLat: row.teeLat ?? null,
+        teeLng: row.teeLng ?? null,
+        source: row.source,
+        osmWayId: row.osmWayId ?? null,
+        updatedAt: now,
+      }).where(eq(courseHoleGeo.id, existing.id)).returning().get();
+    }
+    return db.insert(courseHoleGeo).values({
+      golfCourseId: row.golfCourseId,
+      holeNumber: row.holeNumber,
+      greenLat: row.greenLat,
+      greenLng: row.greenLng,
+      greenPolygonJson: row.greenPolygonJson,
+      teeLat: row.teeLat ?? null,
+      teeLng: row.teeLng ?? null,
+      source: row.source,
+      osmWayId: row.osmWayId ?? null,
+      updatedAt: now,
+    }).returning().get();
+  }
+  deleteCourseHoleGeo(id: number) {
+    return db.delete(courseHoleGeo).where(eq(courseHoleGeo.id, id)).run();
+  }
+  /** Reassign which hole a geo row points to. Pass null to "unassign". If
+   *  another row already had this hole, that row is unassigned (set to null)
+   *  so the (course, hole) relationship stays effectively 1:1 from the UI. */
+  reassignCourseHoleGeo(geoId: number, holeNumber: number | null) {
+    const row = db.select().from(courseHoleGeo).where(eq(courseHoleGeo.id, geoId)).get();
+    if (!row) throw new Error("Geo row not found");
+    if (holeNumber != null) {
+      const conflict = db.select().from(courseHoleGeo).where(and(
+        eq(courseHoleGeo.golfCourseId, row.golfCourseId),
+        eq(courseHoleGeo.holeNumber, holeNumber),
+      )).get();
+      if (conflict && conflict.id !== geoId) {
+        db.update(courseHoleGeo).set({ holeNumber: null, updatedAt: Date.now() })
+          .where(eq(courseHoleGeo.id, conflict.id)).run();
+      }
+    }
+    return db.update(courseHoleGeo).set({ holeNumber, updatedAt: Date.now() })
+      .where(eq(courseHoleGeo.id, geoId)).returning().get();
+  }
+  clearCourseHoleGeo(golfCourseId: number, source?: "osm" | "manual") {
+    if (source) {
+      return db.delete(courseHoleGeo)
+        .where(and(eq(courseHoleGeo.golfCourseId, golfCourseId), eq(courseHoleGeo.source, source)))
+        .run();
+    }
+    return db.delete(courseHoleGeo).where(eq(courseHoleGeo.golfCourseId, golfCourseId)).run();
+  }
+
   /** Apply a 9-hole slice of a catalog tee onto an existing league `courses` row.
    *  Updates name/rating/slope on the layout, then upserts its 9 holes from
    *  catalog hole [startHole .. startHole+8]. Re-ranks handicaps within the 9
@@ -615,6 +733,8 @@ export class Storage {
         name: newName,
         courseRating: nineRating,
         slope: nineSlope,
+        catalogCourseId: catalog.id,
+        startHole: args.startHole,
       }).where(eq(courses.id, args.layoutCourseId)).run();
 
       // Upsert the 9 holes into the layout (holeNumber 1..9 within the layout).

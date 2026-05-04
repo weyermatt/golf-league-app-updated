@@ -7,7 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Search, Download, Wand2, MapPin, Loader2 } from "lucide-react";
+import { Search, Download, Wand2, MapPin, Loader2, Satellite } from "lucide-react";
+import { CourseGreensManager } from "./CourseGreensManager";
 
 type SearchHit = {
   id: number;
@@ -187,7 +188,7 @@ function ImportedCoursesPanel() {
 }
 
 function ImportedCourseRow({ course }: { course: CatalogCourse }) {
-  const [open, setOpen] = useState(false);
+  const [view, setView] = useState<null | "tees" | "greens">(null);
   return (
     <div className="px-4 py-3">
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -199,11 +200,32 @@ function ImportedCourseRow({ course }: { course: CatalogCourse }) {
             {[course.city, course.state, course.country].filter(Boolean).join(", ") || "—"}
           </div>
         </div>
-        <Button size="sm" variant="outline" onClick={() => setOpen(o => !o)} data-testid={`button-toggle-${course.id}`}>
-          {open ? "Hide tees" : "Show tees"}
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            size="sm"
+            variant={view === "tees" ? "default" : "outline"}
+            onClick={() => setView(v => v === "tees" ? null : "tees")}
+            data-testid={`button-toggle-tees-${course.id}`}
+          >
+            Tees
+          </Button>
+          <Button
+            size="sm"
+            variant={view === "greens" ? "default" : "outline"}
+            onClick={() => setView(v => v === "greens" ? null : "greens")}
+            data-testid={`button-toggle-greens-${course.id}`}
+          >
+            <Satellite className="h-4 w-4 mr-1" />
+            GPS / Greens
+          </Button>
+        </div>
       </div>
-      {open && <CourseTeesDetail courseId={course.id} />}
+      {view === "tees" && <CourseTeesDetail courseId={course.id} />}
+      {view === "greens" && (
+        <div className="mt-3">
+          <CourseGreensManager course={course} />
+        </div>
+      )}
     </div>
   );
 }

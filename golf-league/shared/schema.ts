@@ -58,6 +58,12 @@ export const courses = sqliteTable("courses", {
   layout: text("layout").notNull(), // 'front' | 'back'
   courseRating: real("course_rating"),
   slope: integer("slope"),
+  // Optional link to a catalog course (`golf_courses.id`) when this layout was
+  // populated via the Catalog → Apply flow. `startHole` is the catalog hole
+  // number that maps to this layout's hole 1 (typically 1 for front, 10 for
+  // back). Used by the GPS feature to look up green coordinates.
+  catalogCourseId: integer("catalog_course_id"),
+  startHole: integer("start_hole"),
 });
 export const insertCourseSchema = createInsertSchema(courses).omit({ id: true });
 export type InsertCourse = z.infer<typeof insertCourseSchema>;
@@ -245,6 +251,28 @@ export const golfCourseHoles = sqliteTable("golf_course_holes", {
   uniqTeeHole: uniqueIndex("uniq_tee_hole").on(t.teeId, t.holeNumber),
 }));
 export type GolfCourseHole = typeof golfCourseHoles.$inferSelect;
+
+// ---------- Course Hole Geo (GPS data per catalog course hole) ----------
+// One row per catalog course + hole_number (1..18). Green polygon stored as
+// JSON array of {lat,lng}. Source tracks where the data came from so we can
+// re-fetch ('osm') vs. preserve manual edits ('manual').
+export const courseHoleGeo = sqliteTable("course_hole_geo", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  golfCourseId: integer("golf_course_id").notNull(),
+  // 1..18 once assigned; null = imported but not yet assigned to a hole
+  // (happens when OSM doesn't tag the green's `ref` and admin needs to
+  // assign it manually).
+  holeNumber: integer("hole_number"),
+  greenLat: real("green_lat"),
+  greenLng: real("green_lng"),
+  greenPolygonJson: text("green_polygon_json"),
+  teeLat: real("tee_lat"),
+  teeLng: real("tee_lng"),
+  source: text("source").notNull().default("osm"), // 'osm' | 'manual'
+  osmWayId: integer("osm_way_id"),
+  updatedAt: integer("updated_at").notNull(),
+});
+export type CourseHoleGeo = typeof courseHoleGeo.$inferSelect;
 
 // ---------- Sessions ----------
 export const sessions = sqliteTable("sessions", {

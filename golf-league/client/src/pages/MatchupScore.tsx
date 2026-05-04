@@ -21,7 +21,9 @@ import {
   ListOrdered,
   Trophy,
   CheckCircle2,
+  MapPin,
 } from "lucide-react";
+import { HoleGpsMap } from "@/components/HoleGpsMap";
 
 type Player = { id: number; firstName: string; lastName: string };
 type TeamWithDetails = {
@@ -89,6 +91,21 @@ export default function MatchupScore() {
       return res.json();
     },
   });
+
+  // GPS data for the week's 9 holes (front/back of the catalog course). Null
+  // when the layout has no catalog link or the course has no GPS data — we
+  // hide the GPS toggle in that case.
+  const weekId = details?.week?.id;
+  const { data: geoData } = useQuery<{ holes: any[] }>({
+    queryKey: ["/api/weeks", weekId, "geo"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/weeks/${weekId}/geo`);
+      return res.json();
+    },
+    enabled: weekId != null,
+  });
+  const hasAnyGeo = (geoData?.holes || []).some(h => h?.green?.lat != null);
+  const [showGps, setShowGps] = useState(false);
 
   // Local mutable copies of scores so the UI updates instantly
   const [scoresA, setScoresA] = useState<Record<number, number | null>>({});
@@ -271,7 +288,27 @@ export default function MatchupScore() {
             <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Yards</div>
             <div className="text-2xl font-bold tabular-nums" data-testid="text-hole-yards">{yards}</div>
           </div>
+          {hasAnyGeo && (
+            <button
+              type="button"
+              onClick={() => setShowGps(s => !s)}
+              className={`shrink-0 h-10 px-3 rounded-md border text-xs font-medium flex items-center gap-1 ${
+                showGps
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-secondary text-foreground border-border hover-elevate"
+              }`}
+              data-testid="button-toggle-gps"
+              aria-pressed={showGps}
+            >
+              <MapPin className="h-4 w-4" />
+              GPS
+            </button>
+          )}
         </div>
+
+        {showGps && hasAnyGeo && (
+          <HoleGpsMap hole={geoData?.holes?.[hole - 1] ?? null} height={280} />
+        )}
 
         {/* Two team tiles — wrapped in a hole-pager affordance with chevrons
             and a brief peek animation on first paint to telegraph swipeability. */}

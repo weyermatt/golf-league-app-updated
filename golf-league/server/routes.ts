@@ -14,6 +14,7 @@ import bcrypt from "bcryptjs";
 import { computeMatchup, allocateStrokes } from "./lib/scoring";
 import { computePayouts } from "./lib/payouts";
 import { searchCourses as gcaSearch, getCourse as gcaGetCourse } from "./lib/golfCourseApi";
+import { fetchGolfFeatures } from "./lib/overpass";
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   app.use(authMiddleware);
@@ -240,6 +241,123 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     } catch (err: any) {
       res.status(502).json({ message: err?.message || "Import failed" });
     }
+  });
+
+  // ===== Course GPS / Geo =====
+  // Fetch greens + tees from OpenStreetMap and upsert into course_hole_geo.
+  // Greens with `ref` tags get auto-assigned to a hole; the rest are stored
+  // unassigned (holeNumber=null) so the admin can assign them on a map.
+  app.post("/api/catalog/courses/:id/geo/refresh", requireAdmin, async (req, res) => {
+    const id = Number(req.params.id);
+    const course = storage.getGolfCourse(id);
+    if (!course) return res.status(404).json({ message: "Course not found" });
+    if (course.latitude == null || course.longitude == null) {
+      return res.status(400).json({ message: "Course has no lat/lng — cannot query OSM" });
+    }
+    try {
+      const features = await fetchGolfFeatures(course.latitude, course.longitude);
+      // Wipe prior OSM rows so re-fetch reflects current OSM state. Manual
+      // entries are preserved.
+      storage.clearCourseHoleGeo(id, "osm");
+      // Map tees to a quick-lookup by `ref` so we can attach a tee centroid
+      // to greens that share a ref tag (heuristic, only when both are tagged).
+      const teeByRef: Record<number, { lat: number; lng: number }> = {};
+      for (const t of features.tees) {
+        if (t.ref != null) teeByRef[t.ref] = t.centroid;
+      }
+      for (const g of features.greens) {
+        const tee = g.ref != null ? teeByRef[g.ref] : undefined;
+        storage.upsertCourseHoleGeo({
+          golfCourseId: id,
+          holeNumber: g.ref,
+          greenLat: g.centroid.lat,
+          greenLng: g.centroid.lng,
+          greenPolygonJson: JSON.stringify(g.polygon),
+          teeLat: tee?.lat ?? null,
+          teeLng: tee?.lng ?? null,
+          source: "osm",
+          osmWayId: g.wayId,
+        });
+      }
+      const all = storage.listCourseHoleGeo(id);
+      res.json({
+        ok: true,
+        greensFound: features.greens.length,
+        teesFound: features.tees.length,
+        autoAssigned: all.filter(r => r.holeNumber != null).length,
+        unassigned: all.filter(r => r.holeNumber == null).length,
+      });
+    } catch (err: any) {
+      res.status(502).json({ message: err?.message || "OSM fetch failed" });
+    }
+  });
+
+  app.get("/api/catalog/courses/:id/geo", (req, res) => {
+    const id = Number(req.params.id);
+    const course = storage.getGolfCourse(id);
+    if (!course) return res.status(404).json({ message: "Course not found" });
+    const rows = storage.listCourseHoleGeo(id);
+    res.json({
+      course: {
+        id: course.id,
+        latitude: course.latitude,
+        longitude: course.longitude,
+        clubName: course.clubName,
+        courseName: course.courseName,
+      },
+      holes: rows.map(r => ({
+        ...r,
+        polygon: r.greenPolygonJson ? JSON.parse(r.greenPolygonJson) : null,
+      })),
+    });
+  });
+
+  app.patch("/api/geo/:id", requireAdmin, (req, res) => {
+    const id = Number(req.params.id);
+    const schema = z.object({
+      holeNumber: z.number().int().min(1).max(18).nullable(),
+    });
+    const { holeNumber } = schema.parse(req.body);
+    const updated = storage.reassignCourseHoleGeo(id, holeNumber);
+    res.json(updated);
+  });
+
+  app.delete("/api/geo/:id", requireAdmin, (req, res) => {
+    storage.deleteCourseHoleGeo(Number(req.params.id));
+    res.json({ ok: true });
+  });
+
+  // Geo for a league `weeks/:id` — convenience endpoint that resolves the
+  // week's 9-hole layout to its catalog course + start hole and returns the
+  // 9 corresponding green polygons. Returns null/empty when no GPS data is
+  // available so the client can degrade gracefully.
+  app.get("/api/weeks/:id/geo", (req, res) => {
+    const week = storage.getWeek(Number(req.params.id));
+    if (!week) return res.status(404).json({ message: "Week not found" });
+    const layout = storage.getCourse(week.courseId);
+    if (!layout || !layout.catalogCourseId) return res.json({ holes: [] });
+    const start = layout.startHole ?? 1;
+    const allGeo = storage.listCourseHoleGeo(layout.catalogCourseId);
+    const byHole: Record<number, any> = {};
+    for (const g of allGeo) {
+      if (g.holeNumber != null) byHole[g.holeNumber] = g;
+    }
+    const holes: any[] = [];
+    for (let i = 0; i < 9; i++) {
+      const catalogHole = start + i;
+      const g = byHole[catalogHole];
+      holes.push({
+        leagueHole: i + 1,
+        catalogHole,
+        green: g ? {
+          lat: g.greenLat,
+          lng: g.greenLng,
+          polygon: g.greenPolygonJson ? JSON.parse(g.greenPolygonJson) : null,
+        } : null,
+        tee: g && g.teeLat != null && g.teeLng != null ? { lat: g.teeLat, lng: g.teeLng } : null,
+      });
+    }
+    res.json({ holes });
   });
 
   app.post("/api/catalog/apply", requireAdmin, (req, res) => {
