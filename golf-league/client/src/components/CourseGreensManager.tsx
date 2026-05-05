@@ -30,9 +30,20 @@ type GeoRow = {
   osmWayId: number | null;
 };
 
+type TeeRow = {
+  id: number;
+  golfCourseId: number;
+  holeNumber: number | null;
+  lat: number;
+  lng: number;
+  source: "osm" | "manual";
+  osmWayId: number | null;
+};
+
 type GeoResponse = {
   course: { id: number; latitude: number | null; longitude: number | null; clubName: string; courseName: string };
   holes: GeoRow[];
+  tees: TeeRow[];
 };
 
 const HOLE_COLORS = [
@@ -151,9 +162,9 @@ export function CourseGreensManager({ course }: { course: { id: number; latitude
       const result = await res.json();
       qc.invalidateQueries({ queryKey: ["/api/catalog/courses", String(course.id), "geo"] });
       qc.invalidateQueries({ queryKey: ["/api/weeks"] });
-      const msg = result.greensFound === 0
-        ? "No greens found in OpenStreetMap near this course. You may need to map them manually."
-        : `Found ${result.greensFound} green${result.greensFound === 1 ? "" : "s"}. ${result.autoAssigned} auto-assigned, ${result.unassigned} need manual assignment.`;
+      const msg = result.greensFound === 0 && result.teesFound === 0
+        ? "No greens or tees found in OpenStreetMap near this course. You may need to map them manually."
+        : `Greens: ${result.greensFound} found (${result.greensAutoAssigned ?? 0} auto-assigned). Tees: ${result.teesFound} found (${result.teesAutoAssigned ?? 0} auto-assigned). Assign the rest below.`;
       toast({ title: "OSM refreshed", description: msg });
     } catch (err: any) {
       toast({ title: "Refresh failed", description: err.message, variant: "destructive" });
@@ -182,6 +193,26 @@ export function CourseGreensManager({ course }: { course: { id: number; latitude
     }
   };
 
+  const reassignTee = async (teeId: number, holeNumber: number | null) => {
+    try {
+      await apiRequest("PATCH", `/api/tee-geo/${teeId}`, { holeNumber });
+      qc.invalidateQueries({ queryKey: ["/api/catalog/courses", String(course.id), "geo"] });
+      qc.invalidateQueries({ queryKey: ["/api/weeks"] });
+    } catch (err: any) {
+      toast({ title: "Reassign failed", description: err.message, variant: "destructive" });
+    }
+  };
+
+  const removeTee = async (teeId: number) => {
+    if (!confirm("Delete this tee from GPS data?")) return;
+    try {
+      await apiRequest("DELETE", `/api/tee-geo/${teeId}`);
+      qc.invalidateQueries({ queryKey: ["/api/catalog/courses", String(course.id), "geo"] });
+    } catch (err: any) {
+      toast({ title: "Delete failed", description: err.message, variant: "destructive" });
+    }
+  };
+
   const center = useMemo<[number, number] | null>(() => {
     if (course.latitude != null && course.longitude != null) {
       return [course.latitude, course.longitude];
@@ -197,6 +228,8 @@ export function CourseGreensManager({ course }: { course: { id: number; latitude
 
   const greens = data?.holes || [];
   const assignedHoles = new Set(greens.map(g => g.holeNumber).filter((n): n is number => n != null));
+  const tees = data?.tees || [];
+  const assignedTeeHoles = new Set(tees.map(t => t.holeNumber).filter((n): n is number => n != null));
 
   return (
     <div className="space-y-3">
@@ -242,6 +275,19 @@ export function CourseGreensManager({ course }: { course: { id: number; latitude
                     <Tooltip permanent>{g.holeNumber != null ? String(g.holeNumber) : "?"}</Tooltip>
                   </CircleMarker>
                 </FragmentGroup>
+              );
+            })}
+            {tees.map(t => {
+              const color = t.holeNumber != null ? colorFor(t.holeNumber) : "#f59e0b";
+              return (
+                <CircleMarker
+                  key={`tee-${t.id}`}
+                  center={[t.lat, t.lng]}
+                  radius={6}
+                  pathOptions={{ color: "#fff", weight: 2, fillColor: color, fillOpacity: 0.95, dashArray: "2 3" }}
+                >
+                  <Tooltip permanent>{t.holeNumber != null ? `T${t.holeNumber}` : "T?"}</Tooltip>
+                </CircleMarker>
               );
             })}
           </MapContainer>
@@ -294,6 +340,65 @@ export function CourseGreensManager({ course }: { course: { id: number; latitude
                   </td>
                   <td className="px-3 py-2 text-right">
                     <Button size="sm" variant="ghost" onClick={() => removeGreen(g.id)} data-testid={`button-delete-geo-${g.id}`}>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {tees.length > 0 && (
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <div className="px-3 py-2 text-xs font-semibold bg-secondary/40 text-muted-foreground">
+            Tees ({tees.length} cached · {tees.filter(t => t.holeNumber != null).length} assigned)
+          </div>
+          <table className="w-full text-sm">
+            <thead className="bg-secondary/40 text-xs text-muted-foreground">
+              <tr className="text-left">
+                <th className="px-3 py-2">Color</th>
+                <th className="px-3 py-2">Source</th>
+                <th className="px-3 py-2">Lat / Lng</th>
+                <th className="px-3 py-2">Hole #</th>
+                <th className="px-3 py-2 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tees.map(t => (
+                <tr key={t.id} className="border-t border-border" data-testid={`tee-row-${t.id}`}>
+                  <td className="px-3 py-2">
+                    <div className="h-4 w-4 rounded-full border-2 border-background" style={{ background: t.holeNumber != null ? colorFor(t.holeNumber) : "#f59e0b" }} />
+                  </td>
+                  <td className="px-3 py-2 text-xs text-muted-foreground">{t.source}</td>
+                  <td className="px-3 py-2 text-xs tabular-nums text-muted-foreground">
+                    {t.lat.toFixed(5)}, {t.lng.toFixed(5)}
+                  </td>
+                  <td className="px-3 py-2">
+                    <Select
+                      value={t.holeNumber == null ? "none" : String(t.holeNumber)}
+                      onValueChange={v => reassignTee(t.id, v === "none" ? null : Number(v))}
+                    >
+                      <SelectTrigger className="h-8 w-32" data-testid={`select-tee-hole-${t.id}`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">— Unassigned —</SelectItem>
+                        {Array.from({ length: 18 }, (_, i) => i + 1).map(n => (
+                          <SelectItem
+                            key={n}
+                            value={String(n)}
+                            disabled={t.holeNumber !== n && assignedTeeHoles.has(n)}
+                          >
+                            Hole {n}{t.holeNumber !== n && assignedTeeHoles.has(n) ? " (taken)" : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <Button size="sm" variant="ghost" onClick={() => removeTee(t.id)} data-testid={`button-delete-tee-${t.id}`}>
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </td>

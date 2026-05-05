@@ -330,8 +330,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       // Wipe prior OSM rows so re-fetch reflects current OSM state. Manual
       // entries are preserved.
       storage.clearCourseHoleGeo(id, "osm");
+      storage.clearCourseTeeGeo(id, "osm");
       // Map tees to a quick-lookup by `ref` so we can attach a tee centroid
-      // to greens that share a ref tag (heuristic, only when both are tagged).
+      // to greens that share a ref tag (back-compat with the embedded
+      // teeLat/teeLng — kept so old data stays renderable).
       const teeByRef: Record<number, { lat: number; lng: number }> = {};
       for (const t of features.tees) {
         if (t.ref != null) teeByRef[t.ref] = t.centroid;
@@ -350,13 +352,28 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           osmWayId: g.wayId,
         });
       }
-      const all = storage.listCourseHoleGeo(id);
+      // Independent tee rows — every OSM tee gets stored, auto-assigned by
+      // `ref` when present so admins only have to fix the ones OSM didn't tag.
+      for (const t of features.tees) {
+        storage.upsertCourseTeeGeo({
+          golfCourseId: id,
+          holeNumber: t.ref,
+          lat: t.centroid.lat,
+          lng: t.centroid.lng,
+          source: "osm",
+          osmWayId: t.wayId,
+        });
+      }
+      const allGreens = storage.listCourseHoleGeo(id);
+      const allTees = storage.listCourseTeeGeo(id);
       res.json({
         ok: true,
         greensFound: features.greens.length,
         teesFound: features.tees.length,
-        autoAssigned: all.filter(r => r.holeNumber != null).length,
-        unassigned: all.filter(r => r.holeNumber == null).length,
+        greensAutoAssigned: allGreens.filter(r => r.holeNumber != null).length,
+        greensUnassigned: allGreens.filter(r => r.holeNumber == null).length,
+        teesAutoAssigned: allTees.filter(r => r.holeNumber != null).length,
+        teesUnassigned: allTees.filter(r => r.holeNumber == null).length,
       });
     } catch (err: any) {
       res.status(502).json({ message: err?.message || "OSM fetch failed" });
@@ -367,7 +384,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const id = Number(req.params.id);
     const course = storage.getGolfCourse(id);
     if (!course) return res.status(404).json({ message: "Course not found" });
-    const rows = storage.listCourseHoleGeo(id);
+    const greens = storage.listCourseHoleGeo(id);
+    const tees = storage.listCourseTeeGeo(id);
     res.json({
       course: {
         id: course.id,
@@ -376,10 +394,11 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         clubName: course.clubName,
         courseName: course.courseName,
       },
-      holes: rows.map(r => ({
+      holes: greens.map(r => ({
         ...r,
         polygon: r.greenPolygonJson ? JSON.parse(r.greenPolygonJson) : null,
       })),
+      tees,
     });
   });
 
@@ -398,6 +417,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ ok: true });
   });
 
+  app.patch("/api/tee-geo/:id", requireAdmin, (req, res) => {
+    const id = Number(req.params.id);
+    const schema = z.object({
+      holeNumber: z.number().int().min(1).max(18).nullable(),
+    });
+    const { holeNumber } = schema.parse(req.body);
+    const updated = storage.reassignCourseTeeGeo(id, holeNumber);
+    res.json(updated);
+  });
+
+  app.delete("/api/tee-geo/:id", requireAdmin, (req, res) => {
+    storage.deleteCourseTeeGeo(Number(req.params.id));
+    res.json({ ok: true });
+  });
+
   // Geo for a league `weeks/:id` — convenience endpoint that resolves the
   // week's 9-hole layout to its catalog course + start hole and returns the
   // 9 corresponding green polygons. Returns null/empty when no GPS data is
@@ -408,15 +442,27 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const layout = storage.getCourse(week.courseId);
     if (!layout || !layout.catalogCourseId) return res.json({ holes: [] });
     const start = layout.startHole ?? 1;
-    const allGeo = storage.listCourseHoleGeo(layout.catalogCourseId);
-    const byHole: Record<number, any> = {};
-    for (const g of allGeo) {
-      if (g.holeNumber != null) byHole[g.holeNumber] = g;
+    const allGreens = storage.listCourseHoleGeo(layout.catalogCourseId);
+    const allTees = storage.listCourseTeeGeo(layout.catalogCourseId);
+    const greenByHole: Record<number, any> = {};
+    for (const g of allGreens) {
+      if (g.holeNumber != null) greenByHole[g.holeNumber] = g;
+    }
+    const teeByHole: Record<number, any> = {};
+    for (const t of allTees) {
+      if (t.holeNumber != null) teeByHole[t.holeNumber] = t;
     }
     const holes: any[] = [];
     for (let i = 0; i < 9; i++) {
       const catalogHole = start + i;
-      const g = byHole[catalogHole];
+      const g = greenByHole[catalogHole];
+      // Prefer the standalone tee row; fall back to the legacy tee centroid
+      // embedded on the green's row (older data, when tees auto-attached
+      // by `ref` only).
+      const t = teeByHole[catalogHole];
+      const teeLatLng = t
+        ? { lat: t.lat, lng: t.lng }
+        : (g && g.teeLat != null && g.teeLng != null ? { lat: g.teeLat, lng: g.teeLng } : null);
       holes.push({
         leagueHole: i + 1,
         catalogHole,
@@ -425,7 +471,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
           lng: g.greenLng,
           polygon: g.greenPolygonJson ? JSON.parse(g.greenPolygonJson) : null,
         } : null,
-        tee: g && g.teeLat != null && g.teeLng != null ? { lat: g.teeLat, lng: g.teeLng } : null,
+        tee: teeLatLng,
       });
     }
     res.json({ holes });

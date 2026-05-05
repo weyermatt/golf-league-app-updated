@@ -274,6 +274,23 @@ export const courseHoleGeo = sqliteTable("course_hole_geo", {
 });
 export type CourseHoleGeo = typeof courseHoleGeo.$inferSelect;
 
+// ---------- Course Tee Geo (GPS data for tee boxes per catalog course hole) ----------
+// Sibling to course_hole_geo. We keep tees in their own table because OSM
+// often tags tees and greens independently — without a shared `ref` tag we
+// can't auto-attach a tee to a green's row, and the admin needs to assign
+// each one to a hole number after the fact.
+export const courseTeeGeo = sqliteTable("course_tee_geo", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  golfCourseId: integer("golf_course_id").notNull(),
+  holeNumber: integer("hole_number"), // 1..18 once assigned, null when unassigned
+  lat: real("lat").notNull(),
+  lng: real("lng").notNull(),
+  source: text("source").notNull().default("osm"), // 'osm' | 'manual'
+  osmWayId: integer("osm_way_id"),
+  updatedAt: integer("updated_at").notNull(),
+});
+export type CourseTeeGeo = typeof courseTeeGeo.$inferSelect;
+
 // ---------- Sessions ----------
 export const sessions = sqliteTable("sessions", {
   id: text("id").primaryKey(),

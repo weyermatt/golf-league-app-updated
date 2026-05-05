@@ -1,14 +1,14 @@
 import {
   users, players, teams, courses, holes, weeks, matchups, scores, skins,
   handicapHistory, settings, sessions, teamScores, teamHandicapHistory,
-  golfCourses, golfCourseTees, golfCourseHoles, courseHoleGeo,
+  golfCourses, golfCourseTees, golfCourseHoles, courseHoleGeo, courseTeeGeo,
 } from "@shared/schema";
 import type {
   User, InsertUser, Player, InsertPlayer, Team, InsertTeam,
   Course, InsertCourse, Hole, InsertHole, Week, InsertWeek,
   Matchup, InsertMatchup, Score, InsertScore, Skin, HandicapHistory, Settings,
   TeamScore, InsertTeamScore, TeamHandicapHistory,
-  GolfCourse, GolfCourseTee, GolfCourseHole, CourseHoleGeo,
+  GolfCourse, GolfCourseTee, GolfCourseHole, CourseHoleGeo, CourseTeeGeo,
 } from "@shared/schema";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import Database from "better-sqlite3";
@@ -197,6 +197,17 @@ function ensureSchema() {
       updated_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_geo_course ON course_hole_geo(golf_course_id);
+    CREATE TABLE IF NOT EXISTS course_tee_geo (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      golf_course_id INTEGER NOT NULL,
+      hole_number INTEGER,
+      lat REAL NOT NULL,
+      lng REAL NOT NULL,
+      source TEXT NOT NULL DEFAULT 'osm',
+      osm_way_id INTEGER,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tee_geo_course ON course_tee_geo(golf_course_id);
   `);
 
   // Idempotent ALTERs for catalog link on courses (added in Phase 1.5).
@@ -690,6 +701,84 @@ export class Storage {
         .run();
     }
     return db.delete(courseHoleGeo).where(eq(courseHoleGeo.golfCourseId, golfCourseId)).run();
+  }
+
+  // ---- course tee geo ----
+  listCourseTeeGeo(golfCourseId: number): CourseTeeGeo[] {
+    return db.select().from(courseTeeGeo)
+      .where(eq(courseTeeGeo.golfCourseId, golfCourseId))
+      .orderBy(asc(courseTeeGeo.holeNumber)).all();
+  }
+  getCourseTeeGeoForHole(golfCourseId: number, holeNumber: number): CourseTeeGeo | undefined {
+    return db.select().from(courseTeeGeo)
+      .where(and(eq(courseTeeGeo.golfCourseId, golfCourseId), eq(courseTeeGeo.holeNumber, holeNumber)))
+      .get();
+  }
+  upsertCourseTeeGeo(row: {
+    golfCourseId: number;
+    holeNumber: number | null;
+    lat: number;
+    lng: number;
+    source: "osm" | "manual";
+    osmWayId?: number | null;
+  }): CourseTeeGeo {
+    const now = Date.now();
+    let existing: CourseTeeGeo | undefined;
+    if (row.source === "osm" && row.osmWayId != null) {
+      existing = db.select().from(courseTeeGeo)
+        .where(and(eq(courseTeeGeo.golfCourseId, row.golfCourseId), eq(courseTeeGeo.osmWayId, row.osmWayId)))
+        .get();
+    } else if (row.holeNumber != null) {
+      existing = db.select().from(courseTeeGeo)
+        .where(and(eq(courseTeeGeo.golfCourseId, row.golfCourseId), eq(courseTeeGeo.holeNumber, row.holeNumber)))
+        .get();
+    }
+    if (existing) {
+      return db.update(courseTeeGeo).set({
+        holeNumber: row.holeNumber,
+        lat: row.lat,
+        lng: row.lng,
+        source: row.source,
+        osmWayId: row.osmWayId ?? null,
+        updatedAt: now,
+      }).where(eq(courseTeeGeo.id, existing.id)).returning().get();
+    }
+    return db.insert(courseTeeGeo).values({
+      golfCourseId: row.golfCourseId,
+      holeNumber: row.holeNumber,
+      lat: row.lat,
+      lng: row.lng,
+      source: row.source,
+      osmWayId: row.osmWayId ?? null,
+      updatedAt: now,
+    }).returning().get();
+  }
+  deleteCourseTeeGeo(id: number) {
+    return db.delete(courseTeeGeo).where(eq(courseTeeGeo.id, id)).run();
+  }
+  reassignCourseTeeGeo(geoId: number, holeNumber: number | null) {
+    const row = db.select().from(courseTeeGeo).where(eq(courseTeeGeo.id, geoId)).get();
+    if (!row) throw new Error("Tee geo row not found");
+    if (holeNumber != null) {
+      const conflict = db.select().from(courseTeeGeo).where(and(
+        eq(courseTeeGeo.golfCourseId, row.golfCourseId),
+        eq(courseTeeGeo.holeNumber, holeNumber),
+      )).get();
+      if (conflict && conflict.id !== geoId) {
+        db.update(courseTeeGeo).set({ holeNumber: null, updatedAt: Date.now() })
+          .where(eq(courseTeeGeo.id, conflict.id)).run();
+      }
+    }
+    return db.update(courseTeeGeo).set({ holeNumber, updatedAt: Date.now() })
+      .where(eq(courseTeeGeo.id, geoId)).returning().get();
+  }
+  clearCourseTeeGeo(golfCourseId: number, source?: "osm" | "manual") {
+    if (source) {
+      return db.delete(courseTeeGeo)
+        .where(and(eq(courseTeeGeo.golfCourseId, golfCourseId), eq(courseTeeGeo.source, source)))
+        .run();
+    }
+    return db.delete(courseTeeGeo).where(eq(courseTeeGeo.golfCourseId, golfCourseId)).run();
   }
 
   /** Apply a 9-hole slice of a catalog tee onto an existing league `courses` row.

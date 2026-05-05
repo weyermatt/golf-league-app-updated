@@ -307,7 +307,15 @@ export default function MatchupScore() {
         </div>
 
         {showGps && hasAnyGeo && (
-          <HoleGpsMap hole={geoData?.holes?.[hole - 1] ?? null} height={280} />
+          <HoleGpsMap
+            hole={geoData?.holes?.[hole - 1] ?? null}
+            height={320}
+            holeNumber={toDisplay(hole)}
+            onPrevHole={() => setHole(h => Math.max(1, h - 1))}
+            onNextHole={() => setHole(h => Math.min(9, h + 1))}
+            canPrev={hole > 1}
+            canNext={hole < 9}
+          />
         )}
 
         {/* Two team tiles — wrapped in a hole-pager affordance with chevrons
