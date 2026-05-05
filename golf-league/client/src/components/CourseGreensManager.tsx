@@ -4,7 +4,7 @@ import { Fragment, useMemo, useState } from "react";
 // in a list, since react-leaflet only accepts layer children (no <div>s).
 const FragmentGroup = Fragment;
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { MapContainer, TileLayer, Polygon, CircleMarker, Tooltip } from "react-leaflet";
+import { MapContainer, TileLayer, Polygon, CircleMarker, Tooltip, Popup } from "react-leaflet";
 import L from "leaflet";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -56,6 +56,53 @@ const HOLE_COLORS = [
 function colorFor(holeNumber: number | null): string {
   if (holeNumber == null) return "#94a3b8"; // slate-400 for unassigned
   return HOLE_COLORS[(holeNumber - 1) % HOLE_COLORS.length];
+}
+
+// In-popup assignment form. Native <select> rather than the radix Select
+// because radix portals to body and gets tangled up with leaflet's popup
+// click-outside handling. Native is plain, ugly, and rock-solid.
+function AssignPopupForm({
+  label,
+  current,
+  takenHoles,
+  onAssign,
+  onDelete,
+}: {
+  label: string;
+  current: number | null;
+  takenHoles: Set<number>;
+  onAssign: (n: number | null) => void | Promise<void>;
+  onDelete: () => void | Promise<void>;
+}) {
+  return (
+    <div className="space-y-2 min-w-[180px]" data-testid="popup-assign">
+      <div className="text-xs font-semibold text-foreground">{label}</div>
+      <select
+        className="w-full h-8 rounded border border-border bg-background text-sm px-2"
+        value={current == null ? "" : String(current)}
+        onChange={e => {
+          const v = e.target.value;
+          onAssign(v === "" ? null : Number(v));
+        }}
+        data-testid="popup-hole-select"
+      >
+        <option value="">— Unassigned —</option>
+        {Array.from({ length: 18 }, (_, i) => i + 1).map(n => (
+          <option key={n} value={n} disabled={current !== n && takenHoles.has(n)}>
+            Hole {n}{current !== n && takenHoles.has(n) ? " (taken)" : ""}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        className="text-xs text-destructive hover:underline"
+        onClick={onDelete}
+        data-testid="popup-delete"
+      >
+        Delete this point
+      </button>
+    </div>
+  );
 }
 
 function LinkToLayoutPanel({ catalogCourseId }: { catalogCourseId: number }) {
@@ -213,6 +260,22 @@ export function CourseGreensManager({ course }: { course: { id: number; latitude
     }
   };
 
+  const sweepUnassigned = async (kind: "greens" | "tees" | "both") => {
+    const noun = kind === "tees" ? "tees" : kind === "greens" ? "greens" : "unassigned greens and tees";
+    if (!confirm(`Delete every unassigned ${noun}? This can't be undone (you'd need to Refresh from OSM to bring them back).`)) return;
+    try {
+      const res = await apiRequest("POST", `/api/catalog/courses/${course.id}/geo/delete-unassigned`, { kind });
+      const json = await res.json();
+      qc.invalidateQueries({ queryKey: ["/api/catalog/courses", String(course.id), "geo"] });
+      toast({
+        title: "Cleaned up",
+        description: `Deleted ${json.greensDeleted ?? 0} green${json.greensDeleted === 1 ? "" : "s"} and ${json.teesDeleted ?? 0} tee${json.teesDeleted === 1 ? "" : "s"}.`,
+      });
+    } catch (err: any) {
+      toast({ title: "Cleanup failed", description: err.message, variant: "destructive" });
+    }
+  };
+
   const center = useMemo<[number, number] | null>(() => {
     if (course.latitude != null && course.longitude != null) {
       return [course.latitude, course.longitude];
@@ -230,20 +293,36 @@ export function CourseGreensManager({ course }: { course: { id: number; latitude
   const assignedHoles = new Set(greens.map(g => g.holeNumber).filter((n): n is number => n != null));
   const tees = data?.tees || [];
   const assignedTeeHoles = new Set(tees.map(t => t.holeNumber).filter((n): n is number => n != null));
+  const unassignedGreens = greens.filter(g => g.holeNumber == null).length;
+  const unassignedTees = tees.filter(t => t.holeNumber == null).length;
 
   return (
     <div className="space-y-3">
       <LinkToLayoutPanel catalogCourseId={course.id} />
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="text-xs text-muted-foreground">
-          {greens.length === 0
-            ? "No GPS data yet. Click Refresh to fetch greens from OpenStreetMap."
-            : `${greens.length} green${greens.length === 1 ? "" : "s"} cached · ${greens.filter(g => g.holeNumber != null).length} assigned to holes.`}
+          {greens.length === 0 && tees.length === 0
+            ? "No GPS data yet. Click Refresh to fetch greens + tees from OpenStreetMap."
+            : `${greens.length} green${greens.length === 1 ? "" : "s"} · ${tees.length} tee${tees.length === 1 ? "" : "s"} cached. Click any dot on the map to assign it to a hole.`}
         </div>
-        <Button size="sm" variant="outline" onClick={refresh} disabled={refreshing} data-testid={`button-refresh-osm-${course.id}`}>
-          {refreshing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
-          Refresh from OSM
-        </Button>
+        <div className="flex gap-2 flex-wrap">
+          {(unassignedGreens > 0 || unassignedTees > 0) && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => sweepUnassigned("both")}
+              data-testid={`button-sweep-unassigned-${course.id}`}
+              title="Delete every unassigned green + tee at once"
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Delete {unassignedGreens + unassignedTees} unassigned
+            </Button>
+          )}
+          <Button size="sm" variant="outline" onClick={refresh} disabled={refreshing} data-testid={`button-refresh-osm-${course.id}`}>
+            {refreshing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+            Refresh from OSM
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (
@@ -273,6 +352,15 @@ export function CourseGreensManager({ course }: { course: { id: number; latitude
                     pathOptions={{ color: "#fff", weight: 2, fillColor: color, fillOpacity: 1 }}
                   >
                     <Tooltip permanent>{g.holeNumber != null ? String(g.holeNumber) : "?"}</Tooltip>
+                    <Popup>
+                      <AssignPopupForm
+                        label={`Green · ${g.source}`}
+                        current={g.holeNumber}
+                        takenHoles={assignedHoles}
+                        onAssign={n => reassign(g.id, n)}
+                        onDelete={() => removeGreen(g.id)}
+                      />
+                    </Popup>
                   </CircleMarker>
                 </FragmentGroup>
               );
@@ -287,6 +375,15 @@ export function CourseGreensManager({ course }: { course: { id: number; latitude
                   pathOptions={{ color: "#fff", weight: 2, fillColor: color, fillOpacity: 0.95, dashArray: "2 3" }}
                 >
                   <Tooltip permanent>{t.holeNumber != null ? `T${t.holeNumber}` : "T?"}</Tooltip>
+                  <Popup>
+                    <AssignPopupForm
+                      label={`Tee · ${t.source}`}
+                      current={t.holeNumber}
+                      takenHoles={assignedTeeHoles}
+                      onAssign={n => reassignTee(t.id, n)}
+                      onDelete={() => removeTee(t.id)}
+                    />
+                  </Popup>
                 </CircleMarker>
               );
             })}

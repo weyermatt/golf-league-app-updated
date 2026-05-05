@@ -787,6 +787,29 @@ export class Storage {
     return db.delete(courseTeeGeo).where(eq(courseTeeGeo.golfCourseId, golfCourseId)).run();
   }
 
+  /** Bulk-delete every geo row whose hole_number is null. Returns the
+   *  per-table counts so the UI can confirm how much was swept. */
+  deleteUnassignedGeo(golfCourseId: number, kind: "greens" | "tees" | "both"): {
+    greensDeleted: number;
+    teesDeleted: number;
+  } {
+    let greensDeleted = 0;
+    let teesDeleted = 0;
+    if (kind === "greens" || kind === "both") {
+      const r = db.delete(courseHoleGeo)
+        .where(and(eq(courseHoleGeo.golfCourseId, golfCourseId), sql`${courseHoleGeo.holeNumber} IS NULL`))
+        .run();
+      greensDeleted = (r as any).changes ?? 0;
+    }
+    if (kind === "tees" || kind === "both") {
+      const r = db.delete(courseTeeGeo)
+        .where(and(eq(courseTeeGeo.golfCourseId, golfCourseId), sql`${courseTeeGeo.holeNumber} IS NULL`))
+        .run();
+      teesDeleted = (r as any).changes ?? 0;
+    }
+    return { greensDeleted, teesDeleted };
+  }
+
   /** Apply a 9-hole slice of a catalog tee onto an existing league `courses` row.
    *  Updates name/rating/slope on the layout, then upserts its 9 holes from
    *  catalog hole [startHole .. startHole+8]. Re-ranks handicaps within the 9

@@ -437,6 +437,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ ok: true });
   });
 
+  // Bulk-delete every row with hole_number = null for a course. Useful after
+  // an OSM refresh on a course with multiple tee sets — admins assign one
+  // tee per hole, then sweep the rest in one click.
+  app.post("/api/catalog/courses/:id/geo/delete-unassigned", requireAdmin, (req, res) => {
+    const id = Number(req.params.id);
+    const schema = z.object({ kind: z.enum(["greens", "tees", "both"]).default("both") });
+    const { kind } = schema.parse(req.body || {});
+    const deleted = storage.deleteUnassignedGeo(id, kind);
+    res.json({ ok: true, ...deleted });
+  });
+
   // Geo for a league `weeks/:id` — convenience endpoint that resolves the
   // week's 9-hole layout to its catalog course + start hole and returns the
   // 9 corresponding green polygons. Returns null/empty when no GPS data is
