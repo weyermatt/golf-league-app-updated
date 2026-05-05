@@ -327,10 +327,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     }
     try {
       const features = await fetchGolfFeatures(course.latitude, course.longitude);
-      // Wipe prior OSM rows so re-fetch reflects current OSM state. Manual
-      // entries are preserved.
-      storage.clearCourseHoleGeo(id, "osm");
-      storage.clearCourseTeeGeo(id, "osm");
+      // We DO NOT pre-wipe OSM rows. upsertCourseHoleGeo / upsertCourseTeeGeo
+      // dedupe by osm_way_id and preserve any holeNumber the admin already
+      // set, so re-running Refresh is safe — it refreshes lat/lng/polygon
+      // for known features and adds rows for any new ones, without losing
+      // hole assignments. Stale rows (OSM features that were removed)
+      // remain visible in the admin so they can be deleted manually.
       // Map tees to a quick-lookup by `ref` so we can attach a tee centroid
       // to greens that share a ref tag (back-compat with the embedded
       // teeLat/teeLng — kept so old data stays renderable).
@@ -370,9 +372,12 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         ok: true,
         greensFound: features.greens.length,
         teesFound: features.tees.length,
-        greensAutoAssigned: allGreens.filter(r => r.holeNumber != null).length,
+        // Total counts of rows currently in the DB (post-upsert). Includes
+        // both OSM-ref-derived auto-assignments and any manual assignments
+        // the admin made previously — those are preserved across refreshes.
+        greensAssigned: allGreens.filter(r => r.holeNumber != null).length,
         greensUnassigned: allGreens.filter(r => r.holeNumber == null).length,
-        teesAutoAssigned: allTees.filter(r => r.holeNumber != null).length,
+        teesAssigned: allTees.filter(r => r.holeNumber != null).length,
         teesUnassigned: allTees.filter(r => r.holeNumber == null).length,
       });
     } catch (err: any) {

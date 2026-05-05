@@ -164,7 +164,7 @@ export function CourseGreensManager({ course }: { course: { id: number; latitude
       qc.invalidateQueries({ queryKey: ["/api/weeks"] });
       const msg = result.greensFound === 0 && result.teesFound === 0
         ? "No greens or tees found in OpenStreetMap near this course. You may need to map them manually."
-        : `Greens: ${result.greensFound} found (${result.greensAutoAssigned ?? 0} auto-assigned). Tees: ${result.teesFound} found (${result.teesAutoAssigned ?? 0} auto-assigned). Assign the rest below.`;
+        : `Greens: ${result.greensFound} fetched · ${result.greensAssigned ?? 0} assigned to holes. Tees: ${result.teesFound} fetched · ${result.teesAssigned ?? 0} assigned. Existing hole assignments were preserved.`;
       toast({ title: "OSM refreshed", description: msg });
     } catch (err: any) {
       toast({ title: "Refresh failed", description: err.message, variant: "destructive" });

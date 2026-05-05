@@ -647,8 +647,11 @@ export class Storage {
         .get();
     }
     if (existing) {
+      // Preserve any holeNumber already on the row — admins assign these by
+      // hand and re-running OSM Refresh shouldn't undo their work. Only fall
+      // back to the incoming holeNumber when the existing one is null.
       return db.update(courseHoleGeo).set({
-        holeNumber: row.holeNumber,
+        holeNumber: existing.holeNumber ?? row.holeNumber,
         greenLat: row.greenLat,
         greenLng: row.greenLng,
         greenPolygonJson: row.greenPolygonJson,
@@ -734,8 +737,11 @@ export class Storage {
         .get();
     }
     if (existing) {
+      // Same preservation rule as greens: keep the admin-assigned holeNumber
+      // across OSM refreshes; only fill in from OSM when the existing slot
+      // is empty.
       return db.update(courseTeeGeo).set({
-        holeNumber: row.holeNumber,
+        holeNumber: existing.holeNumber ?? row.holeNumber,
         lat: row.lat,
         lng: row.lng,
         source: row.source,
