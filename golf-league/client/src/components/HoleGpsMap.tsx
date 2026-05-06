@@ -91,11 +91,14 @@ function distanceLabelIcon(yards: number) {
   });
 }
 
+// Bigger hit area than the visible crosshair so a touchpad-imprecise grab
+// still lands on the marker. The visible 28×28 ring sits centered inside a
+// 48×48 transparent box; mousedown anywhere in the box starts the drag.
 const aimIcon = L.divIcon({
-  html: `<div style="width:28px;height:28px;border-radius:9999px;border:3px solid #fff;background:rgba(255,255,255,0.15);box-shadow:0 0 0 2px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;cursor:grab;"><div style="width:6px;height:6px;border-radius:9999px;background:#fff;"></div></div>`,
+  html: `<div style="width:48px;height:48px;display:flex;align-items:center;justify-content:center;cursor:grab;touch-action:none;"><div style="width:28px;height:28px;border-radius:9999px;border:3px solid #fff;background:rgba(255,255,255,0.15);box-shadow:0 0 0 2px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;"><div style="width:6px;height:6px;border-radius:9999px;background:#fff;"></div></div></div>`,
   className: "",
-  iconSize: [28, 28],
-  iconAnchor: [14, 14],
+  iconSize: [48, 48],
+  iconAnchor: [24, 24],
 });
 
 // Imperative fit/rotate handler. Runs whenever fitNonce ticks — parent bumps
@@ -143,6 +146,20 @@ export function HoleGpsMap({
   const [aim, setAim] = useState<LatLng | null>(null);
   const [fitNonce, setFitNonce] = useState(0);
   const mapRef = useRef<L.Map | null>(null);
+  const aimMarkerRef = useRef<L.Marker | null>(null);
+
+  // leaflet-rotate patches Marker.Drag inside _initInteraction, but the patch
+  // only sticks if dragging is enabled at the moment the marker mounts on a
+  // rotated map. Edge cases — fast remounts, prop diffs in react-leaflet —
+  // can land us with `dragging` defined but not enabled. Force-enable it
+  // every time the aim point changes to keep drag responsive.
+  useEffect(() => {
+    if (!aim) return;
+    const m = aimMarkerRef.current as any;
+    if (m && m.dragging && !m.dragging.enabled()) {
+      m.dragging.enable();
+    }
+  }, [aim]);
 
   const greenLatLng: LatLng | null = hole?.green && hole.green.lat != null && hole.green.lng != null
     ? { lat: hole.green.lat, lng: hole.green.lng } : null;
@@ -196,9 +213,28 @@ export function HoleGpsMap({
 
   const fitHole = () => setFitNonce(n => n + 1);
 
+  // String height ("100%") = fill-parent mode used by the fullscreen overlay.
+  // Number height = fixed pixel mode used in the embedded card view. They
+  // need different layouts: the fill-parent mode wants a flex column that
+  // claims its parent's height; the embedded mode keeps the rounded card.
+  const isFill = typeof height === "string";
+
   return (
-    <div className="space-y-2">
-      <div className="relative rounded-xl overflow-hidden border border-border" style={{ height }}>
+    <div className={isFill ? "h-full w-full flex flex-col" : "space-y-2"}>
+      <div
+        // `z-0` here is load-bearing: the absolute-positioned controls below
+        // use `z-[1000]` to sit on top of leaflet panes. Without a stacking
+        // context on this wrapper, that 1000 escapes globally and floats
+        // above sibling components like radix Dialogs (z-50). With z-0
+        // (which creates a stacking context when combined with `relative`),
+        // the children's z-index is contained.
+        className={
+          isFill
+            ? "relative z-0 flex-1 min-h-0"
+            : "relative z-0 rounded-xl overflow-hidden border border-border"
+        }
+        style={isFill ? undefined : { height }}
+      >
         <MapContainer
           ref={mapRef as any}
           center={[greenLatLng.lat, greenLatLng.lng]}
@@ -260,9 +296,10 @@ export function HoleGpsMap({
                 pathOptions={{ color: "#fff", weight: 2, opacity: 0.85, dashArray: "4 6", interactive: false }}
               />
               <Marker
+                ref={aimMarkerRef as any}
                 position={[aim.lat, aim.lng]}
                 icon={aimIcon}
-                draggable
+                draggable={true}
                 eventHandlers={{
                   drag: e => {
                     const ll = (e.target as L.Marker).getLatLng();
@@ -402,6 +439,15 @@ export function HoleGpsMap({
             </button>
           )}
         </div>
+
+        {/* Geolocation error — in fullscreen mode this overlays the map (no
+            room for a stack item below); in embedded mode it falls through
+            to the sibling block below the map. */}
+        {isFill && geoErr && (
+          <div className="absolute bottom-14 left-1/2 -translate-x-1/2 z-[900] max-w-[90%] bg-amber-500/90 text-white text-[11px] font-medium px-3 py-1.5 rounded-full shadow-lg text-center">
+            {geoErr.replace(/[.\s]+$/, "")}. Distances appear once your location is available.
+          </div>
+        )}
       </div>
 
       <GeolocationWatcher
@@ -411,7 +457,7 @@ export function HoleGpsMap({
         }}
       />
 
-      {geoErr && (
+      {!isFill && geoErr && (
         <div className="text-xs text-amber-600 dark:text-amber-400">
           {geoErr.replace(/[.\s]+$/, "")}. GPS distances will appear once your location is available.
         </div>
