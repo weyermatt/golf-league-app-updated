@@ -171,13 +171,18 @@ export function HoleGpsMap({
     return distancesToGreen(player, polygon, greenLatLng);
   }, [player, polygon, greenLatLng]);
 
-  const aimDists = useMemo(() => {
-    if (!aim || !player || !greenLatLng) return null;
-    return {
-      playerToAim: metersToYards(distMeters(player, aim)),
-      aimToGreen: metersToYards(distMeters(aim, greenLatLng)),
-    };
-  }, [aim, player, greenLatLng]);
+  // Aim-line distances split: aim→green only needs the aim + green (works
+  // before the user has a GPS fix); player→aim needs both. Drawing them
+  // separately means the crosshair appears the moment you tap, even with
+  // no fix yet.
+  const aimToGreenYds = useMemo(() => {
+    if (!aim || !greenLatLng) return null;
+    return metersToYards(distMeters(aim, greenLatLng));
+  }, [aim, greenLatLng]);
+  const playerToAimYds = useMemo(() => {
+    if (!aim || !player) return null;
+    return metersToYards(distMeters(player, aim));
+  }, [aim, player]);
 
   // Re-fit whenever the hole changes (and clear any aim from the previous hole).
   useEffect(() => {
@@ -289,41 +294,58 @@ export function HoleGpsMap({
               pathOptions={{ color: "#fff", weight: 2, fillColor: "#3b82f6", fillOpacity: 1, interactive: false }}
             />
           )}
-          {aim && player && greenLatLng && (
+          {/* Aim layers split by what they need:
+                - the crosshair only needs an aim point (so it renders even
+                  before the user has a GPS fix — bug, previously gated on
+                  `player` and never appeared for players without a fix);
+                - the aim→green segment + distance label needs aim + green;
+                - the player→aim segment + distance label needs aim + player.
+              All Polylines share the same dashed-white style. */}
+          {aim && (
+            <Marker
+              ref={aimMarkerRef as any}
+              position={[aim.lat, aim.lng]}
+              icon={aimIcon}
+              draggable={true}
+              eventHandlers={{
+                drag: e => {
+                  const ll = (e.target as L.Marker).getLatLng();
+                  setAim({ lat: ll.lat, lng: ll.lng });
+                },
+                dragend: e => {
+                  const ll = (e.target as L.Marker).getLatLng();
+                  setAim({ lat: ll.lat, lng: ll.lng });
+                },
+              }}
+            />
+          )}
+          {aim && greenLatLng && (
             <>
               <Polyline
-                positions={[[player.lat, player.lng], [aim.lat, aim.lng], [greenLatLng.lat, greenLatLng.lng]]}
+                positions={[[aim.lat, aim.lng], [greenLatLng.lat, greenLatLng.lng]]}
                 pathOptions={{ color: "#fff", weight: 2, opacity: 0.85, dashArray: "4 6", interactive: false }}
               />
-              <Marker
-                ref={aimMarkerRef as any}
-                position={[aim.lat, aim.lng]}
-                icon={aimIcon}
-                draggable={true}
-                eventHandlers={{
-                  drag: e => {
-                    const ll = (e.target as L.Marker).getLatLng();
-                    setAim({ lat: ll.lat, lng: ll.lng });
-                  },
-                  dragend: e => {
-                    const ll = (e.target as L.Marker).getLatLng();
-                    setAim({ lat: ll.lat, lng: ll.lng });
-                  },
-                }}
+              {aimToGreenYds != null && (
+                <Marker
+                  position={[midpoint(aim, greenLatLng).lat, midpoint(aim, greenLatLng).lng]}
+                  icon={distanceLabelIcon(aimToGreenYds)}
+                  interactive={false}
+                />
+              )}
+            </>
+          )}
+          {aim && player && (
+            <>
+              <Polyline
+                positions={[[player.lat, player.lng], [aim.lat, aim.lng]]}
+                pathOptions={{ color: "#fff", weight: 2, opacity: 0.85, dashArray: "4 6", interactive: false }}
               />
-              {aimDists && (
-                <>
-                  <Marker
-                    position={[midpoint(player, aim).lat, midpoint(player, aim).lng]}
-                    icon={distanceLabelIcon(aimDists.playerToAim)}
-                    interactive={false}
-                  />
-                  <Marker
-                    position={[midpoint(aim, greenLatLng).lat, midpoint(aim, greenLatLng).lng]}
-                    icon={distanceLabelIcon(aimDists.aimToGreen)}
-                    interactive={false}
-                  />
-                </>
+              {playerToAimYds != null && (
+                <Marker
+                  position={[midpoint(player, aim).lat, midpoint(player, aim).lng]}
+                  icon={distanceLabelIcon(playerToAimYds)}
+                  interactive={false}
+                />
               )}
             </>
           )}
