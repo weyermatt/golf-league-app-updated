@@ -7,6 +7,7 @@ import "leaflet-rotate";
 import type { LatLng } from "@/lib/geo";
 import { distMeters, metersToYards, distancesToGreen } from "@/lib/geo";
 import { Crosshair, Locate, X, ChevronLeft, ChevronRight, Maximize2 } from "lucide-react";
+import { getSatelliteTile } from "@/lib/mapTiles";
 
 type HoleGeo = {
   green: { lat: number | null; lng: number | null; polygon: LatLng[] | null } | null;
@@ -26,8 +27,7 @@ type Props = {
   canNext?: boolean;
 };
 
-const ESRI_SAT_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
-const ESRI_ATTR = "Tiles &copy; Esri — Source: Esri, Maxar, Earthstar Geographics, and the GIS User Community";
+const TILE = getSatelliteTile();
 
 /** Initial bearing from a → b, in degrees clockwise from true north. */
 function bearingDeg(a: LatLng, b: LatLng): number {
@@ -80,7 +80,7 @@ function distanceLabelIcon(yards: number) {
 }
 
 const aimIcon = L.divIcon({
-  html: `<div style="width:28px;height:28px;border-radius:9999px;border:3px solid #fff;background:rgba(255,255,255,0.15);box-shadow:0 0 0 2px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;"><div style="width:6px;height:6px;border-radius:9999px;background:#fff;"></div></div>`,
+  html: `<div style="width:28px;height:28px;border-radius:9999px;border:3px solid #fff;background:rgba(255,255,255,0.15);box-shadow:0 0 0 2px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;cursor:grab;"><div style="width:6px;height:6px;border-radius:9999px;background:#fff;"></div></div>`,
   className: "",
   iconSize: [28, 28],
   iconAnchor: [14, 14],
@@ -99,11 +99,8 @@ function FitAndRotate({
   const map = useMap() as any;
   useEffect(() => {
     if (!green) return;
-    // Bearing tee→green clockwise from N. We want that direction "up" on
-    // screen. leaflet-rotate's setBearing(θ) rotates map content clockwise
-    // by θ degrees (rotation matrix is math-CCW, but screen Y-axis is
-    // flipped, so it appears clockwise). To make a vector with geographic
-    // bearing β point up, we counter-rotate: setBearing(-β) ≡ setBearing(360-β).
+    // setBearing(360 - β) puts the tee→green vector at the top of the screen.
+    // Verified empirically — tee at bottom, green at top, fairway vertical.
     const β = tee ? bearingDeg(tee, green) : 0;
     const targetBearing = tee ? (360 - β) % 360 : 0;
     if (typeof map.setBearing === "function") {
@@ -199,7 +196,7 @@ export function HoleGpsMap({
           {...({ rotate: true, bearing: 0, touchRotate: false, rotateControl: false } as any)}
           style={{ height: "100%", width: "100%" }}
         >
-          <TileLayer url={ESRI_SAT_URL} attribution={ESRI_ATTR} maxZoom={19} />
+          <TileLayer url={TILE.url} attribution={TILE.attribution} maxZoom={TILE.maxZoom} />
           {teeLatLng && (
             <Polyline
               positions={[[teeLatLng.lat, teeLatLng.lng], [greenLatLng.lat, greenLatLng.lng]]}
@@ -207,12 +204,25 @@ export function HoleGpsMap({
             />
           )}
           {polygon && polygon.length > 2 && (
-            <Polygon positions={polygon.map(p => [p.lat, p.lng])} pathOptions={{ color: "#10b981", weight: 2, fillOpacity: 0.35 }} />
+            <>
+              {/* Outer halo: lighter green ring around the green for contrast
+                  against satellite imagery (works on any tile provider). */}
+              <Polygon
+                positions={polygon.map(p => [p.lat, p.lng])}
+                pathOptions={{ color: "#86efac", weight: 6, opacity: 0.55, fillOpacity: 0 }}
+              />
+              {/* Stylized green: bright fill, crisp dark border. Shape pops
+                  even on the sharper Mapbox tiles. */}
+              <Polygon
+                positions={polygon.map(p => [p.lat, p.lng])}
+                pathOptions={{ color: "#065f46", weight: 2, fillColor: "#34d399", fillOpacity: 0.55 }}
+              />
+            </>
           )}
           <CircleMarker
             center={[greenLatLng.lat, greenLatLng.lng]}
-            radius={4}
-            pathOptions={{ color: "#10b981", fillColor: "#10b981", fillOpacity: 1 }}
+            radius={5}
+            pathOptions={{ color: "#fff", weight: 2, fillColor: "#065f46", fillOpacity: 1 }}
           />
           {teeLatLng && (
             <CircleMarker
@@ -238,7 +248,21 @@ export function HoleGpsMap({
                 positions={[[player.lat, player.lng], [aim.lat, aim.lng], [greenLatLng.lat, greenLatLng.lng]]}
                 pathOptions={{ color: "#fff", weight: 2, opacity: 0.85, dashArray: "4 6" }}
               />
-              <Marker position={[aim.lat, aim.lng]} icon={aimIcon} interactive={false} />
+              <Marker
+                position={[aim.lat, aim.lng]}
+                icon={aimIcon}
+                draggable
+                eventHandlers={{
+                  drag: e => {
+                    const ll = (e.target as L.Marker).getLatLng();
+                    setAim({ lat: ll.lat, lng: ll.lng });
+                  },
+                  dragend: e => {
+                    const ll = (e.target as L.Marker).getLatLng();
+                    setAim({ lat: ll.lat, lng: ll.lng });
+                  },
+                }}
+              />
               {aimDists && (
                 <>
                   <Marker
@@ -297,7 +321,7 @@ export function HoleGpsMap({
             </button>
           ) : (
             <div className="pointer-events-none bg-black/55 backdrop-blur text-white/90 text-[11px] rounded-full px-3 py-1.5 shadow-lg flex items-center gap-1.5">
-              <Crosshair className="h-3 w-3" /> Tap map to aim
+              <Crosshair className="h-3 w-3" /> Tap map to aim · drag to adjust
             </div>
           )}
         </div>
@@ -367,7 +391,9 @@ export function HoleGpsMap({
       />
 
       {geoErr && (
-        <div className="text-xs text-amber-600 dark:text-amber-400">{geoErr} GPS distances will appear once your location is available.</div>
+        <div className="text-xs text-amber-600 dark:text-amber-400">
+          {geoErr.replace(/[.\s]+$/, "")}. GPS distances will appear once your location is available.
+        </div>
       )}
     </div>
   );

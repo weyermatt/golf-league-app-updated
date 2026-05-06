@@ -12,9 +12,9 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, RefreshCw, Trash2, Link as LinkIcon } from "lucide-react";
+import { getSatelliteTile } from "@/lib/mapTiles";
 
-const ESRI_SAT_URL = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
-const ESRI_ATTR = "Tiles &copy; Esri";
+const TILE = getSatelliteTile();
 
 type GeoRow = {
   id: number;
@@ -332,7 +332,7 @@ export function CourseGreensManager({ course }: { course: { id: number; latitude
       ) : (
         <div className="rounded-lg overflow-hidden border border-border" style={{ height: 400 }}>
           <MapContainer center={center} zoom={greens.length > 0 ? 16 : 14} scrollWheelZoom style={{ height: "100%", width: "100%" }}>
-            <TileLayer url={ESRI_SAT_URL} attribution={ESRI_ATTR} maxZoom={19} />
+            <TileLayer url={TILE.url} attribution={TILE.attribution} maxZoom={TILE.maxZoom} />
             {greens.map(g => {
               if (g.greenLat == null || g.greenLng == null) return null;
               const color = colorFor(g.holeNumber);
