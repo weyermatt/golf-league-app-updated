@@ -179,6 +179,10 @@ export function HoleGpsMap({
     if (!aim || !greenLatLng) return null;
     return metersToYards(distMeters(aim, greenLatLng));
   }, [aim, greenLatLng]);
+  const teeToAimYds = useMemo(() => {
+    if (!aim || !teeLatLng) return null;
+    return metersToYards(distMeters(teeLatLng, aim));
+  }, [aim, teeLatLng]);
   const playerToAimYds = useMemo(() => {
     if (!aim || !player) return null;
     return metersToYards(distMeters(player, aim));
@@ -254,7 +258,9 @@ export function HoleGpsMap({
               anywhere on the map (including ON the green polygon) bubbles up
               to the map's click handler that drops the aim crosshair. The
               draggable aim Marker stays interactive so it can be grabbed. */}
-          {teeLatLng && (
+          {/* Static tee→green centerline. Hidden when an aim is set so it
+              doesn't compete visually with the three aim-segments below. */}
+          {teeLatLng && !aim && (
             <Polyline
               positions={[[teeLatLng.lat, teeLatLng.lng], [greenLatLng.lat, greenLatLng.lng]]}
               pathOptions={{ color: "#fff", weight: 2.5, opacity: 0.65, interactive: false }}
@@ -329,6 +335,21 @@ export function HoleGpsMap({
                 <Marker
                   position={[midpoint(aim, greenLatLng).lat, midpoint(aim, greenLatLng).lng]}
                   icon={distanceLabelIcon(aimToGreenYds)}
+                  interactive={false}
+                />
+              )}
+            </>
+          )}
+          {aim && teeLatLng && (
+            <>
+              <Polyline
+                positions={[[teeLatLng.lat, teeLatLng.lng], [aim.lat, aim.lng]]}
+                pathOptions={{ color: "#fff", weight: 2, opacity: 0.85, dashArray: "4 6", interactive: false }}
+              />
+              {teeToAimYds != null && (
+                <Marker
+                  position={[midpoint(teeLatLng, aim).lat, midpoint(teeLatLng, aim).lng]}
+                  icon={distanceLabelIcon(teeToAimYds)}
                   interactive={false}
                 />
               )}
