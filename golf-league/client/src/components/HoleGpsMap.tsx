@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { MapContainer, TileLayer, Polygon, Polyline, CircleMarker, Marker, Tooltip, useMap, useMapEvents } from "react-leaflet";
+import { MapContainer, TileLayer, Polygon, Polyline, CircleMarker, Marker, useMap } from "react-leaflet";
 import L from "leaflet";
 // Side-effect import: extends L.Map.prototype with setBearing/getBearing and
 // adds rotation-aware fitBounds. Must run before MapContainer mounts.
 import "leaflet-rotate";
 import type { LatLng } from "@/lib/geo";
 import { distMeters, metersToYards, distancesToGreen } from "@/lib/geo";
-import { Crosshair, Locate, X, ChevronLeft, ChevronRight, Maximize2 } from "lucide-react";
+import { Crosshair, Locate, X, ChevronLeft, ChevronRight, Maximize2, Expand } from "lucide-react";
 import { getSatelliteTile } from "@/lib/mapTiles";
 
 type HoleGeo = {
@@ -16,7 +16,9 @@ type HoleGeo = {
 
 type Props = {
   hole: HoleGeo | null;
-  height?: number;
+  // number => CSS pixels; string => raw CSS value (e.g. "100%" inside a flex
+  // container for the fullscreen wrapper).
+  height?: number | string;
   // Optional hole-pager wiring: when both callbacks are provided, on-map
   // chevrons appear so the user can change holes without scrolling out of
   // the GPS view.
@@ -25,6 +27,9 @@ type Props = {
   onNextHole?: () => void;
   canPrev?: boolean;
   canNext?: boolean;
+  // When provided, an Expand button appears in the bottom controls and calls
+  // this back. Parent decides what fullscreen means (mounts an overlay etc).
+  onFullscreen?: () => void;
 };
 
 const TILE = getSatelliteTile();
@@ -57,11 +62,18 @@ function GeolocationWatcher({ onPos }: { onPos: (pos: LatLng | null, err: string
 }
 
 function MapClickHandler({ onClick }: { onClick: (latlng: LatLng) => void }) {
-  useMapEvents({
-    click(e) {
+  const map = useMap();
+  // Bind directly via map.on so we control the lifecycle. useMapEvents was
+  // the previous approach but clicks didn't fire reliably on desktop
+  // touchpads with the map rotated. Direct binding sidesteps any
+  // react-leaflet event-subscription quirks.
+  useEffect(() => {
+    const handler = (e: any) => {
       onClick({ lat: e.latlng.lat, lng: e.latlng.lng });
-    },
-  });
+    };
+    map.on("click", handler);
+    return () => { map.off("click", handler); };
+  }, [map, onClick]);
   return null;
 }
 
@@ -124,7 +136,7 @@ function FitAndRotate({
 }
 
 export function HoleGpsMap({
-  hole, height = 320, holeNumber, onPrevHole, onNextHole, canPrev, canNext,
+  hole, height = 320, holeNumber, onPrevHole, onNextHole, canPrev, canNext, onFullscreen,
 }: Props) {
   const [player, setPlayer] = useState<LatLng | null>(null);
   const [geoErr, setGeoErr] = useState<string | null>(null);
@@ -197,10 +209,14 @@ export function HoleGpsMap({
           style={{ height: "100%", width: "100%" }}
         >
           <TileLayer url={TILE.url} attribution={TILE.attribution} maxZoom={TILE.maxZoom} />
+          {/* All decorative layers below have `interactive: false` so a tap
+              anywhere on the map (including ON the green polygon) bubbles up
+              to the map's click handler that drops the aim crosshair. The
+              draggable aim Marker stays interactive so it can be grabbed. */}
           {teeLatLng && (
             <Polyline
               positions={[[teeLatLng.lat, teeLatLng.lng], [greenLatLng.lat, greenLatLng.lng]]}
-              pathOptions={{ color: "#fff", weight: 2.5, opacity: 0.65 }}
+              pathOptions={{ color: "#fff", weight: 2.5, opacity: 0.65, interactive: false }}
             />
           )}
           {polygon && polygon.length > 2 && (
@@ -209,44 +225,39 @@ export function HoleGpsMap({
                   against satellite imagery (works on any tile provider). */}
               <Polygon
                 positions={polygon.map(p => [p.lat, p.lng])}
-                pathOptions={{ color: "#86efac", weight: 6, opacity: 0.55, fillOpacity: 0 }}
+                pathOptions={{ color: "#86efac", weight: 6, opacity: 0.55, fillOpacity: 0, interactive: false }}
               />
-              {/* Stylized green: bright fill, crisp dark border. Shape pops
-                  even on the sharper Mapbox tiles. */}
+              {/* Stylized green: bright fill, crisp dark border. */}
               <Polygon
                 positions={polygon.map(p => [p.lat, p.lng])}
-                pathOptions={{ color: "#065f46", weight: 2, fillColor: "#34d399", fillOpacity: 0.55 }}
+                pathOptions={{ color: "#065f46", weight: 2, fillColor: "#34d399", fillOpacity: 0.55, interactive: false }}
               />
             </>
           )}
           <CircleMarker
             center={[greenLatLng.lat, greenLatLng.lng]}
             radius={5}
-            pathOptions={{ color: "#fff", weight: 2, fillColor: "#065f46", fillOpacity: 1 }}
+            pathOptions={{ color: "#fff", weight: 2, fillColor: "#065f46", fillOpacity: 1, interactive: false }}
           />
           {teeLatLng && (
             <CircleMarker
               center={[teeLatLng.lat, teeLatLng.lng]}
               radius={6}
-              pathOptions={{ color: "#fff", weight: 2, fillColor: "#f59e0b", fillOpacity: 1 }}
-            >
-              <Tooltip permanent={false}>Tee</Tooltip>
-            </CircleMarker>
+              pathOptions={{ color: "#fff", weight: 2, fillColor: "#f59e0b", fillOpacity: 1, interactive: false }}
+            />
           )}
           {player && (
             <CircleMarker
               center={[player.lat, player.lng]}
               radius={8}
-              pathOptions={{ color: "#fff", weight: 2, fillColor: "#3b82f6", fillOpacity: 1 }}
-            >
-              <Tooltip permanent={false}>You</Tooltip>
-            </CircleMarker>
+              pathOptions={{ color: "#fff", weight: 2, fillColor: "#3b82f6", fillOpacity: 1, interactive: false }}
+            />
           )}
           {aim && player && greenLatLng && (
             <>
               <Polyline
                 positions={[[player.lat, player.lng], [aim.lat, aim.lng], [greenLatLng.lat, greenLatLng.lng]]}
-                pathOptions={{ color: "#fff", weight: 2, opacity: 0.85, dashArray: "4 6" }}
+                pathOptions={{ color: "#fff", weight: 2, opacity: 0.85, dashArray: "4 6", interactive: false }}
               />
               <Marker
                 position={[aim.lat, aim.lng]}
@@ -360,8 +371,8 @@ export function HoleGpsMap({
           </div>
         )}
 
-        {/* Bottom controls: re-center + fit hole */}
-        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-[1000] flex gap-2">
+        {/* Bottom controls: re-center + fit hole + fullscreen */}
+        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 z-[1000] flex gap-2 flex-wrap justify-center">
           <button
             type="button"
             onClick={fitHole}
@@ -378,6 +389,16 @@ export function HoleGpsMap({
               data-testid="button-recenter"
             >
               <Locate className="h-3.5 w-3.5" /> Re-center
+            </button>
+          )}
+          {onFullscreen && (
+            <button
+              type="button"
+              onClick={onFullscreen}
+              className="bg-black/70 backdrop-blur text-white text-xs font-medium rounded-full px-3 py-1.5 shadow-lg flex items-center gap-1.5 hover:bg-black/80"
+              data-testid="button-fullscreen"
+            >
+              <Expand className="h-3.5 w-3.5" /> Fullscreen
             </button>
           )}
         </div>

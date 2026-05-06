@@ -22,6 +22,8 @@ import {
   Trophy,
   CheckCircle2,
   MapPin,
+  Expand,
+  Minimize2,
 } from "lucide-react";
 import { HoleGpsMap } from "@/components/HoleGpsMap";
 
@@ -106,6 +108,16 @@ export default function MatchupScore() {
   });
   const hasAnyGeo = (geoData?.holes || []).some(h => h?.green?.lat != null);
   const [showGps, setShowGps] = useState(false);
+  const [gpsFullscreen, setGpsFullscreen] = useState(false);
+
+  // Lock body scroll while fullscreen GPS is open so phone users can drag
+  // freely on the map without rubber-banding the page below.
+  useEffect(() => {
+    if (!gpsFullscreen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, [gpsFullscreen]);
 
   // Local mutable copies of scores so the UI updates instantly
   const [scoresA, setScoresA] = useState<Record<number, number | null>>({});
@@ -289,20 +301,32 @@ export default function MatchupScore() {
             <div className="text-2xl font-bold tabular-nums" data-testid="text-hole-yards">{yards}</div>
           </div>
           {hasAnyGeo && (
-            <button
-              type="button"
-              onClick={() => setShowGps(s => !s)}
-              className={`shrink-0 h-10 px-3 rounded-md border text-xs font-medium flex items-center gap-1 ${
-                showGps
-                  ? "bg-primary text-primary-foreground border-primary"
-                  : "bg-secondary text-foreground border-border hover-elevate"
-              }`}
-              data-testid="button-toggle-gps"
-              aria-pressed={showGps}
-            >
-              <MapPin className="h-4 w-4" />
-              GPS
-            </button>
+            <div className="flex flex-col gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowGps(s => !s)}
+                className={`h-10 px-3 rounded-md border text-xs font-medium flex items-center gap-1 ${
+                  showGps
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-secondary text-foreground border-border hover-elevate"
+                }`}
+                data-testid="button-toggle-gps"
+                aria-pressed={showGps}
+              >
+                <MapPin className="h-4 w-4" />
+                GPS
+              </button>
+              <button
+                type="button"
+                onClick={() => setGpsFullscreen(true)}
+                className="h-7 px-2 rounded-md border border-border bg-card text-[10px] font-medium flex items-center gap-1 hover-elevate"
+                data-testid="button-open-gps-fullscreen"
+                title="Open GPS in fullscreen"
+              >
+                <Expand className="h-3 w-3" />
+                Fullscreen
+              </button>
+            </div>
           )}
         </div>
 
@@ -315,6 +339,7 @@ export default function MatchupScore() {
             onNextHole={() => setHole(h => Math.min(9, h + 1))}
             canPrev={hole > 1}
             canNext={hole < 9}
+            onFullscreen={() => setGpsFullscreen(true)}
           />
         )}
 
@@ -517,6 +542,57 @@ export default function MatchupScore() {
         )}
       </div>
 
+      {/* Fullscreen GPS overlay. The picker Dialog below portals to body, so
+          it appears above this overlay even though the markup nests after it. */}
+      {gpsFullscreen && hasAnyGeo && (
+        <div className="fixed inset-0 z-40 bg-black flex flex-col" data-testid="gps-fullscreen">
+          <div className="flex-shrink-0 px-3 py-2 flex items-center justify-between bg-black/85 backdrop-blur text-white">
+            <div className="text-sm font-semibold tabular-nums">
+              Hole {toDisplay(hole)} · Par {par}{yards ? ` · ${yards} yds` : ""}
+            </div>
+            <button
+              type="button"
+              onClick={() => setGpsFullscreen(false)}
+              className="h-8 px-3 rounded-full bg-white/15 hover:bg-white/25 text-xs font-medium flex items-center gap-1.5"
+              data-testid="button-exit-gps-fullscreen"
+            >
+              <Minimize2 className="h-3.5 w-3.5" /> Exit
+            </button>
+          </div>
+          <div className="flex-1 min-h-0">
+            <HoleGpsMap
+              hole={geoData?.holes?.[hole - 1] ?? null}
+              height="100%"
+              holeNumber={toDisplay(hole)}
+              onPrevHole={() => setHole(h => Math.max(1, h - 1))}
+              onNextHole={() => setHole(h => Math.min(9, h + 1))}
+              canPrev={hole > 1}
+              canNext={hole < 9}
+            />
+          </div>
+          <div className="flex-shrink-0 p-2 space-y-2 bg-black/85 backdrop-blur">
+            <FullscreenScoreTile
+              initial={(a.captain?.lastName?.[0] || a.name[0] || "•").toUpperCase()}
+              label={teamPlayersLabel(a)}
+              sub={`Hcp ${a.handicap ?? "—"}${strokeA > 0 ? ` · +${strokeA} stroke${strokeA > 1 ? "s" : ""}` : ""}${details.matchup.teamAScratch ? " · scratch" : ""}`}
+              score={aScore ?? null}
+              onTap={() => canEdit && setPickerOpen("A")}
+              disabled={!canEdit}
+              testId="fullscreen-tile-a"
+            />
+            <FullscreenScoreTile
+              initial={(b.captain?.lastName?.[0] || b.name[0] || "•").toUpperCase()}
+              label={teamPlayersLabel(b)}
+              sub={`Hcp ${b.handicap ?? "—"}${strokeB > 0 ? ` · +${strokeB} stroke${strokeB > 1 ? "s" : ""}` : ""}${details.matchup.teamBScratch ? " · scratch" : ""}`}
+              score={bScore ?? null}
+              onTap={() => canEdit && setPickerOpen("B")}
+              disabled={!canEdit}
+              testId="fullscreen-tile-b"
+            />
+          </div>
+        </div>
+      )}
+
       {/* Number picker dialog */}
       <Dialog open={pickerOpen !== null} onOpenChange={(o) => !o && setPickerOpen(null)}>
         <DialogContent className="max-w-xs">
@@ -555,6 +631,42 @@ export default function MatchupScore() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function FullscreenScoreTile({
+  initial, label, sub, score, onTap, disabled, testId,
+}: {
+  initial: string;
+  label: string;
+  sub: string;
+  score: number | null;
+  onTap: () => void;
+  disabled?: boolean;
+  testId?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onTap}
+      disabled={disabled}
+      className="w-full flex items-center justify-between rounded-xl bg-white/8 backdrop-blur border border-white/15 px-4 py-2.5 text-left transition-colors hover:bg-white/15 disabled:opacity-60 disabled:cursor-not-allowed"
+      style={{ background: "rgba(255,255,255,0.08)" }}
+      data-testid={testId}
+    >
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="h-9 w-9 shrink-0 rounded-full bg-emerald-500/30 text-white text-sm font-bold flex items-center justify-center">
+          {initial}
+        </div>
+        <div className="min-w-0">
+          <div className="text-sm text-white font-medium truncate">{label}</div>
+          <div className="text-[11px] text-white/60 truncate">{sub}</div>
+        </div>
+      </div>
+      <div className="text-2xl font-bold text-white tabular-nums w-12 text-right shrink-0">
+        {score ?? "—"}
+      </div>
+    </button>
   );
 }
 
