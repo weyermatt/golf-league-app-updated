@@ -51,9 +51,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
 
   // ===== Emergency admin recovery =====
+  // Requires the RECOVERY_CODE env var to be set on the server. Returning
+  // 503 when it's missing is intentional: previously this endpoint had a
+  // hardcoded fallback ("erie-village-2026-reset") that would let anyone
+  // who read the public source reset any user's password. Treating the
+  // endpoint as unavailable when no code is configured means a misconfigured
+  // deploy fails closed instead of fails open.
   app.post("/api/auth/recover", (req, res) => {
     const { recoveryCode, username, newPassword } = req.body || {};
-    const expected = process.env.RECOVERY_CODE || "erie-village-2026-reset";
+    const expected = process.env.RECOVERY_CODE;
+    if (!expected) {
+      return res.status(503).json({ message: "Recovery is not configured on this server" });
+    }
     if (!recoveryCode || String(recoveryCode) !== expected) {
       return res.status(401).json({ message: "Invalid recovery code" });
     }
