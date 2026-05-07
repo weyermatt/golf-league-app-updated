@@ -4,7 +4,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { CalendarDays, ChevronRight, Pencil } from "lucide-react";
+import { CalendarDays, Pencil } from "lucide-react";
 import { useAuth } from "@/lib/auth";
 
 export default function Schedule() {
@@ -37,7 +37,7 @@ export default function Schedule() {
     <div>
       <PageHeader title="Schedule" description="Weekly matchups, dates, and course layout" />
 
-      <div className="grid gap-3">
+      <div className="space-y-6">
         {(!weeks || weeks.length === 0) && (
           <Card><CardContent className="p-10 text-center text-muted-foreground">
             <CalendarDays className="h-10 w-10 mx-auto mb-3 opacity-30" />
@@ -48,69 +48,96 @@ export default function Schedule() {
           const wkMatchups = (matchups || []).filter(m => m.weekId === w.id);
           const layout = courseMap[w.courseId];
           return (
-            <Link key={w.id} href={`/weeks/${w.id}`} data-testid={`link-week-${w.id}`}>
-              <Card className="group hover-elevate active-elevate-2 cursor-pointer transition-colors hover:border-emerald-500/40">
-                <CardContent className="p-5">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-3 mb-2 flex-wrap">
-                        <span className="text-xs uppercase tracking-wide text-muted-foreground font-semibold">Week {w.weekNumber}</span>
-                        <span className="text-xs text-muted-foreground tabular-nums">{w.date}</span>
-                        {layout && (
-                          <Badge variant={layout.layout === "front" ? "default" : "secondary"} className="capitalize">
-                            {layout.layout} 9
-                          </Badge>
+            <div key={w.id} className="space-y-2" data-testid={`week-${w.id}`}>
+              {/* Week heading — sits above the matchup cards as a section
+                  label, no longer a clickable card itself. Matchup cards
+                  carry the link to the week detail. */}
+              <div className="flex items-baseline gap-2 flex-wrap px-1">
+                <span className="text-xs uppercase tracking-wide text-muted-foreground font-semibold">
+                  Week {w.weekNumber}
+                </span>
+                <span className="text-xs text-muted-foreground tabular-nums">{w.date}</span>
+                {layout && (
+                  <Badge variant={layout.layout === "front" ? "default" : "secondary"} className="capitalize">
+                    {layout.layout} 9
+                  </Badge>
+                )}
+              </div>
+
+              {wkMatchups.length === 0 && (
+                <Card>
+                  <CardContent className="p-4 text-sm text-muted-foreground">
+                    No matchups set for this week yet.
+                  </CardContent>
+                </Card>
+              )}
+
+              {wkMatchups.map(m => {
+                const a = teamMap[m.teamAId];
+                const b = teamMap[m.teamBId];
+                const played = m.teamAPoints != null;
+                const aWon = played && m.teamAPoints > m.teamBPoints;
+                const bWon = played && m.teamBPoints > m.teamAPoints;
+                const enterable = canEnter(m);
+                return (
+                  <Link key={m.id} href={`/weeks/${w.id}`} data-testid={`matchup-${m.id}`}>
+                    <Card className="hover-elevate active-elevate-2 cursor-pointer transition-colors hover:border-emerald-500/40">
+                      <CardContent className="p-4 space-y-2">
+                        <TeamRow team={a} points={m.teamAPoints} winner={aWon} />
+                        <div className="border-t border-border" />
+                        <TeamRow team={b} points={m.teamBPoints} winner={bWon} />
+                        {enterable && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="w-full mt-2"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              navigate(`/matchups/${m.id}/score`);
+                            }}
+                            data-testid={`button-enter-scores-${m.id}`}
+                          >
+                            <Pencil className="h-3.5 w-3.5 mr-1.5" />
+                            Enter Scores
+                          </Button>
                         )}
-                      </div>
-                      <div className="space-y-1">
-                        {wkMatchups.length === 0 && <div className="text-sm text-muted-foreground">No matchups set</div>}
-                        {wkMatchups.map(m => {
-                          const a = teamMap[m.teamAId];
-                          const b = teamMap[m.teamBId];
-                          const played = m.teamAPoints != null;
-                          const enterable = canEnter(m);
-                          return (
-                            <div key={m.id} className="flex items-center gap-3 text-sm" data-testid={`matchup-${m.id}`}>
-                              <span className={`flex-1 text-right ${played && m.teamAPoints > m.teamBPoints ? "font-semibold" : ""}`}>
-                                {a?.name || "?"} {played && <span className="ml-1 text-xs tabular-nums text-muted-foreground">({m.teamAPoints})</span>}
-                              </span>
-                              <span className="text-xs text-muted-foreground">vs</span>
-                              <span className={`flex-1 ${played && m.teamBPoints > m.teamAPoints ? "font-semibold" : ""}`}>
-                                {b?.name || "?"} {played && <span className="ml-1 text-xs tabular-nums text-muted-foreground">({m.teamBPoints})</span>}
-                              </span>
-                              {enterable && (
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 px-2 text-xs"
-                                  onClick={(e) => {
-                                    e.preventDefault();
-                                    e.stopPropagation();
-                                    navigate(`/matchups/${m.id}/score`);
-                                  }}
-                                  data-testid={`button-enter-scores-${m.id}`}
-                                >
-                                  <Pencil className="h-3 w-3 mr-1" /> Enter
-                                </Button>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                    <div className="flex flex-col items-end gap-1 shrink-0">
-                      <span className="text-[10px] uppercase tracking-wide text-emerald-600 dark:text-emerald-400 font-semibold opacity-70 group-hover:opacity-100 transition-opacity">
-                        View results
-                      </span>
-                      <ChevronRight className="h-5 w-5 text-emerald-600 dark:text-emerald-400 transition-transform group-hover:translate-x-0.5" />
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </Link>
+                      </CardContent>
+                    </Card>
+                  </Link>
+                );
+              })}
+            </div>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function TeamRow({ team, points, winner }: {
+  team: any;
+  points: number | null;
+  winner: boolean;
+}) {
+  const hcp = team?.currentHandicap ?? team?.startingHandicap ?? null;
+  return (
+    <div className="flex items-center gap-3">
+      <div className="flex-1 min-w-0">
+        <div className={`font-medium truncate ${winner ? "text-emerald-600 dark:text-emerald-400" : ""}`}>
+          {team?.name || "?"}
+        </div>
+        {hcp != null && (
+          <div className="text-xs text-muted-foreground tabular-nums">
+            Hcp {Number(hcp).toFixed(1)}
+          </div>
+        )}
+      </div>
+      {points != null && (
+        <div className={`text-2xl font-bold tabular-nums shrink-0 ${winner ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground"}`}>
+          {points}
+        </div>
+      )}
     </div>
   );
 }

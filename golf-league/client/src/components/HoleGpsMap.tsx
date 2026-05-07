@@ -6,7 +6,7 @@ import L from "leaflet";
 import "leaflet-rotate";
 import type { LatLng } from "@/lib/geo";
 import { distMeters, metersToYards, distancesToGreen } from "@/lib/geo";
-import { Crosshair, Locate, ChevronLeft, ChevronRight, Maximize2, Expand } from "lucide-react";
+import { Crosshair, Locate, ChevronLeft, ChevronRight, Maximize2, Expand, X } from "lucide-react";
 import { getSatelliteTile } from "@/lib/mapTiles";
 
 type HoleGeo = {
@@ -144,6 +144,11 @@ export function HoleGpsMap({
 }: Props) {
   const [player, setPlayer] = useState<LatLng | null>(null);
   const [geoErr, setGeoErr] = useState<string | null>(null);
+  // Tracks the last-dismissed geo error message. The banner re-appears if the
+  // error text changes (e.g. denied → unavailable) so genuinely new info is
+  // never silently suppressed; same error stays hidden until reload.
+  const [geoErrDismissedFor, setGeoErrDismissedFor] = useState<string | null>(null);
+  const showGeoErr = geoErr != null && geoErr !== geoErrDismissedFor;
   const [aim, setAim] = useState<LatLng | null>(null);
   const [fitNonce, setFitNonce] = useState(0);
   const mapRef = useRef<L.Map | null>(null);
@@ -488,12 +493,22 @@ export function HoleGpsMap({
           )}
         </div>
 
-        {/* Geolocation error — in fullscreen mode this overlays the map (no
-            room for a stack item below); in embedded mode it falls through
-            to the sibling block below the map. */}
-        {isFill && geoErr && (
-          <div className="absolute bottom-14 left-1/2 -translate-x-1/2 z-[900] max-w-[90%] bg-amber-500/90 text-white text-[11px] font-medium px-3 py-1.5 rounded-full shadow-lg text-center">
-            {geoErr.replace(/[.\s]+$/, "")}. Distances appear once your location is available.
+        {/* Geolocation error — small dismissible pill. Fullscreen tucks it
+            into the bottom-left corner so it doesn't compete with the
+            controls; embedded shows it below the map. The X dismisses
+            until the message changes (e.g. denied → unavailable). */}
+        {isFill && showGeoErr && (
+          <div className="absolute bottom-3 left-3 z-[900] max-w-[60%] bg-amber-500/90 text-white text-[10px] font-medium pl-2.5 pr-1 py-1 rounded-full shadow-lg flex items-center gap-1">
+            <span className="truncate">No GPS</span>
+            <button
+              type="button"
+              onClick={() => setGeoErrDismissedFor(geoErr)}
+              className="h-4 w-4 shrink-0 rounded-full hover:bg-white/20 flex items-center justify-center"
+              aria-label="Dismiss GPS warning"
+              data-testid="button-dismiss-geo-err-fullscreen"
+            >
+              <X className="h-2.5 w-2.5" />
+            </button>
           </div>
         )}
       </div>
@@ -505,9 +520,18 @@ export function HoleGpsMap({
         }}
       />
 
-      {!isFill && geoErr && (
-        <div className="text-xs text-amber-600 dark:text-amber-400">
-          {geoErr.replace(/[.\s]+$/, "")}. GPS distances will appear once your location is available.
+      {!isFill && showGeoErr && (
+        <div className="inline-flex items-center gap-1.5 text-[11px] text-amber-700 dark:text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded-full pl-2.5 pr-1 py-0.5">
+          <span>No GPS — drag the ring to measure manually</span>
+          <button
+            type="button"
+            onClick={() => setGeoErrDismissedFor(geoErr)}
+            className="h-4 w-4 shrink-0 rounded-full hover:bg-amber-500/20 flex items-center justify-center"
+            aria-label="Dismiss GPS warning"
+            data-testid="button-dismiss-geo-err"
+          >
+            <X className="h-2.5 w-2.5" />
+          </button>
         </div>
       )}
     </div>

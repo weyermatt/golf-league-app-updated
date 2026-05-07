@@ -158,9 +158,9 @@ function MatchupCard({ m, holes, totalPar, toDisplay }: { m: any; holes: any[]; 
   const totalScore = (scores: Record<number, number>) =>
     holes.reduce((s, h) => s + (scores[h.holeNumber] ?? 0), 0);
 
-  const renderTeamRow = (label: string, scores: Record<number, number>, strokesMap: Record<number, number>) => (
+  const renderTeamRow = (label: string, rosterTitle: string, scores: Record<number, number>, strokesMap: Record<number, number>) => (
     <tr className="border-t border-border">
-      <td className="px-2 py-2 text-left whitespace-nowrap font-medium">{label}</td>
+      <td className="px-2 py-2 text-left whitespace-nowrap font-medium" title={rosterTitle}>{label}</td>
       {holes.map(h => {
         const s = scores[h.holeNumber];
         const strk = strokesMap[h.holeNumber] || 0;
@@ -183,12 +183,15 @@ function MatchupCard({ m, holes, totalPar, toDisplay }: { m: any; holes: any[]; 
     </tr>
   );
 
-  const teamLabel = (t: any) => {
+  // Team name only — roster moved to a hover-tooltip on the row label so the
+  // scorecard reads cleanly without "Shannon/Gilmore (Breven Gilmore & Jamie
+  // Shannon)" duplication. Tap-and-hold on touch devices reveals the title.
+  const teamLabel = (t: any) => t?.name ?? "";
+  const rosterTitle = (t: any) => {
     if (!t) return "";
     const cap = t.captain ? `${t.captain.firstName} ${t.captain.lastName}` : "";
     const mate = t.mate ? `${t.mate.firstName} ${t.mate.lastName}` : "";
-    if (cap && mate) return `${t.name} (${cap} & ${mate})`;
-    return t.name;
+    return cap && mate ? `${cap} & ${mate}` : (cap || mate);
   };
 
   return (
@@ -227,8 +230,13 @@ function MatchupCard({ m, holes, totalPar, toDisplay }: { m: any; holes: any[]; 
         )}
       </CardHeader>
       <CardContent>
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs tabular-nums border-separate border-spacing-0">
+        {/* Subtle right-edge gradient telegraphs that the scorecard scrolls
+            horizontally — without it, narrow viewports show a clipped table
+            with no affordance. The fade is a 24px overlay that matches the
+            card background. pointer-events-none so it never eats taps. */}
+        <div className="relative">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs tabular-nums border-separate border-spacing-0">
             <thead>
               <tr className="text-muted-foreground bg-secondary/30">
                 <th className="px-2 py-2 text-left font-medium">Hole</th>
@@ -248,9 +256,9 @@ function MatchupCard({ m, holes, totalPar, toDisplay }: { m: any; holes: any[]; 
             </thead>
             <tbody>
               {/* Team A — single best-ball row */}
-              {renderTeamRow(teamLabel(m.teamA), m.teamA.scores, strokesA)}
+              {renderTeamRow(teamLabel(m.teamA), rosterTitle(m.teamA), m.teamA.scores, strokesA)}
               {/* Team B — single best-ball row */}
-              {renderTeamRow(teamLabel(m.teamB), m.teamB.scores, strokesB)}
+              {renderTeamRow(teamLabel(m.teamB), rosterTitle(m.teamB), m.teamB.scores, strokesB)}
               {/* Per-hole points */}
               {detail && (
                 <tr className="border-t-2 border-border bg-secondary/40">
@@ -268,6 +276,11 @@ function MatchupCard({ m, holes, totalPar, toDisplay }: { m: any; holes: any[]; 
               )}
             </tbody>
           </table>
+          </div>
+          <div
+            className="pointer-events-none absolute top-0 right-0 h-full w-6 bg-gradient-to-l from-card to-transparent"
+            aria-hidden="true"
+          />
         </div>
         <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
           <span className="inline-flex items-center gap-1">

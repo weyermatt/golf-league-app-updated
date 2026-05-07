@@ -573,18 +573,24 @@ export default function MatchupScore() {
           <div className="flex-shrink-0 p-2 space-y-2 bg-black/85 backdrop-blur">
             <FullscreenScoreTile
               initial={(a.captain?.lastName?.[0] || a.name[0] || "•").toUpperCase()}
-              label={teamPlayersLabel(a)}
-              sub={`Hcp ${a.handicap ?? "—"}${strokeA > 0 ? ` · +${strokeA} stroke${strokeA > 1 ? "s" : ""}` : ""}${details.matchup.teamAScratch ? " · scratch" : ""}`}
+              title={teamPlayersLabel(a)}
+              sub={teamSubLabel(a)}
+              handicap={a.handicap}
+              scratch={!!details.matchup.teamAScratch}
               score={aScore ?? null}
+              stroke={strokeA}
               onTap={() => canEdit && setPickerOpen("A")}
               disabled={!canEdit}
               testId="fullscreen-tile-a"
             />
             <FullscreenScoreTile
               initial={(b.captain?.lastName?.[0] || b.name[0] || "•").toUpperCase()}
-              label={teamPlayersLabel(b)}
-              sub={`Hcp ${b.handicap ?? "—"}${strokeB > 0 ? ` · +${strokeB} stroke${strokeB > 1 ? "s" : ""}` : ""}${details.matchup.teamBScratch ? " · scratch" : ""}`}
+              title={teamPlayersLabel(b)}
+              sub={teamSubLabel(b)}
+              handicap={b.handicap}
+              scratch={!!details.matchup.teamBScratch}
               score={bScore ?? null}
+              stroke={strokeB}
               onTap={() => canEdit && setPickerOpen("B")}
               disabled={!canEdit}
               testId="fullscreen-tile-b"
@@ -635,38 +641,72 @@ export default function MatchupScore() {
 }
 
 function FullscreenScoreTile({
-  initial, label, sub, score, onTap, disabled, testId,
+  initial, title, sub, handicap, scratch, score, stroke, onTap, disabled, testId,
 }: {
   initial: string;
-  label: string;
+  title: string;
   sub: string;
+  handicap: number;
+  scratch?: boolean;
   score: number | null;
+  stroke: number;
   onTap: () => void;
   disabled?: boolean;
   testId?: string;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onTap}
-      disabled={disabled}
-      className="w-full flex items-center justify-between rounded-xl bg-white/8 backdrop-blur border border-white/15 px-4 py-2.5 text-left transition-colors hover:bg-white/15 disabled:opacity-60 disabled:cursor-not-allowed"
+    <div
+      className={`rounded-xl bg-white/8 border border-white/15 p-2.5 flex items-center gap-3 ${disabled ? "opacity-60" : ""}`}
       style={{ background: "rgba(255,255,255,0.08)" }}
       data-testid={testId}
     >
-      <div className="flex items-center gap-3 min-w-0">
-        <div className="h-9 w-9 shrink-0 rounded-full bg-emerald-500/30 text-white text-sm font-bold flex items-center justify-center">
-          {initial}
-        </div>
-        <div className="min-w-0">
-          <div className="text-sm text-white font-medium truncate">{label}</div>
-          <div className="text-[11px] text-white/60 truncate">{sub}</div>
+      <div className="h-10 w-10 shrink-0 rounded-full bg-zinc-700 text-zinc-200 flex items-center justify-center font-bold text-base">
+        {initial}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="font-semibold text-white truncate text-sm">{title}</div>
+        <div className="text-[11px] text-white/60 truncate">{sub}</div>
+        <div className="text-[11px] text-white/70 tabular-nums flex items-center gap-1.5">
+          {scratch ? (
+            <>
+              <span className="line-through opacity-60">{handicap.toFixed(1)}</span>
+              <span className="text-[9px] px-1.5 py-0 rounded border border-amber-400/40 text-amber-300">
+                Sub — No Hcp
+              </span>
+            </>
+          ) : (
+            <span>{handicap.toFixed(1)} Handicap</span>
+          )}
         </div>
       </div>
-      <div className="text-2xl font-bold text-white tabular-nums w-12 text-right shrink-0">
-        {score ?? "—"}
+      <div className="flex flex-col items-end gap-1 shrink-0">
+        <button
+          type="button"
+          onClick={onTap}
+          disabled={disabled}
+          className={`min-w-[72px] h-14 rounded-lg flex flex-col items-center justify-center font-bold leading-none transition-colors disabled:cursor-not-allowed ${
+            score != null
+              ? "bg-emerald-500 text-white hover:bg-emerald-600"
+              : "bg-sky-500 text-white hover:bg-sky-600"
+          }`}
+          data-testid={`${testId}-score-button`}
+        >
+          {score != null ? (
+            <span className="text-2xl tabular-nums">{score}</span>
+          ) : (
+            <span className="text-[10px] px-2 text-center leading-tight">TAP TO<br/>SCORE</span>
+          )}
+        </button>
+        {stroke > 0 && (
+          <span
+            className="text-[9px] px-1.5 py-0.5 rounded bg-zinc-900 text-white border border-zinc-700 tabular-nums"
+            data-testid={`${testId}-stroke-badge`}
+          >
+            -{stroke} Stroke{stroke > 1 ? "s" : ""}
+          </span>
+        )}
       </div>
-    </button>
+    </div>
   );
 }
 
