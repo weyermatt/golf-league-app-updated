@@ -6,7 +6,7 @@ import L from "leaflet";
 import "leaflet-rotate";
 import type { LatLng } from "@/lib/geo";
 import { distMeters, metersToYards, distancesToGreen } from "@/lib/geo";
-import { Crosshair, Locate, X, ChevronLeft, ChevronRight, Maximize2, Expand } from "lucide-react";
+import { Crosshair, Locate, ChevronLeft, ChevronRight, Maximize2, Expand } from "lucide-react";
 import { getSatelliteTile } from "@/lib/mapTiles";
 
 type HoleGeo = {
@@ -91,14 +91,15 @@ function distanceLabelIcon(yards: number) {
   });
 }
 
-// Bigger hit area than the visible crosshair so a touchpad-imprecise grab
-// still lands on the marker. The visible 28×28 ring sits centered inside a
-// 48×48 transparent box; mousedown anywhere in the box starts the drag.
+// Visible ring is 36×36 with a 4px white border, sitting inside a 64×64
+// transparent wrapper that defines the drag hit area. Bigger hit area so a
+// touchpad-imprecise grab still lands; bigger ring so the crosshair reads
+// as a draggable handle, not a transient mark.
 const aimIcon = L.divIcon({
-  html: `<div style="width:48px;height:48px;display:flex;align-items:center;justify-content:center;cursor:grab;touch-action:none;"><div style="width:28px;height:28px;border-radius:9999px;border:3px solid #fff;background:rgba(255,255,255,0.15);box-shadow:0 0 0 2px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;"><div style="width:6px;height:6px;border-radius:9999px;background:#fff;"></div></div></div>`,
+  html: `<div style="width:64px;height:64px;display:flex;align-items:center;justify-content:center;cursor:grab;touch-action:none;"><div style="width:36px;height:36px;border-radius:9999px;border:4px solid #fff;background:rgba(255,255,255,0.18);box-shadow:0 0 0 2px rgba(0,0,0,0.5),0 2px 8px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;"><div style="width:8px;height:8px;border-radius:9999px;background:#fff;box-shadow:0 0 4px rgba(0,0,0,0.6);"></div></div></div>`,
   className: "",
-  iconSize: [48, 48],
-  iconAnchor: [24, 24],
+  iconSize: [64, 64],
+  iconAnchor: [32, 32],
 });
 
 // Imperative fit/rotate handler. Runs whenever fitNonce ticks — parent bumps
@@ -188,9 +189,22 @@ export function HoleGpsMap({
     return metersToYards(distMeters(player, aim));
   }, [aim, player]);
 
-  // Re-fit whenever the hole changes (and clear any aim from the previous hole).
+  // Re-fit when the hole changes, and seed the aim crosshair to the
+  // midpoint of tee→green so it's always visible and ready to drag. Most
+  // golfers think of the aim as "where I'm planning to land" — starting
+  // it in the fairway gives them a draggable ruler from go, no tap-to-drop
+  // required. Falls back to the green when there's no tee linked yet.
   useEffect(() => {
-    setAim(null);
+    if (teeLatLng && greenLatLng) {
+      setAim({
+        lat: (teeLatLng.lat + greenLatLng.lat) / 2,
+        lng: (teeLatLng.lng + greenLatLng.lng) / 2,
+      });
+    } else if (greenLatLng) {
+      setAim({ lat: greenLatLng.lat, lng: greenLatLng.lng });
+    } else {
+      setAim(null);
+    }
     setFitNonce(n => n + 1);
   }, [greenLatLng?.lat, greenLatLng?.lng, teeLatLng?.lat, teeLatLng?.lng]);
 
@@ -399,22 +413,13 @@ export function HoleGpsMap({
           </div>
         </div>
 
-        {/* Aim hint / clear */}
-        <div className="absolute top-2 left-2 z-[1000] flex flex-col gap-2">
-          {aim ? (
-            <button
-              type="button"
-              onClick={() => setAim(null)}
-              className="pointer-events-auto bg-black/70 backdrop-blur text-white text-xs font-medium rounded-full px-3 py-1.5 shadow-lg flex items-center gap-1 hover:bg-black/80"
-              data-testid="button-clear-aim"
-            >
-              <X className="h-3 w-3" /> Clear aim
-            </button>
-          ) : (
-            <div className="pointer-events-none bg-black/55 backdrop-blur text-white/90 text-[11px] rounded-full px-3 py-1.5 shadow-lg flex items-center gap-1.5">
-              <Crosshair className="h-3 w-3" /> Tap map to aim · drag to adjust
-            </div>
-          )}
+        {/* Persistent hint — the aim crosshair is always present now (default
+            seeded to fairway midpoint), so the hint just tells users it's a
+            draggable ruler. Tapping anywhere on the map still moves it. */}
+        <div className="absolute top-2 left-2 z-[1000] pointer-events-none">
+          <div className="bg-black/55 backdrop-blur text-white/90 text-[11px] rounded-full px-3 py-1.5 shadow-lg flex items-center gap-1.5">
+            <Crosshair className="h-3 w-3" /> Drag the ring · or tap to jump
+          </div>
         </div>
 
         {/* Hole pager — shown only when wired up by parent */}
