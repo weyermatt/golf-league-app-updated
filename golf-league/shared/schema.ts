@@ -110,6 +110,12 @@ export const weeks = sqliteTable("weeks", {
   date: text("date").notNull(), // ISO date string
   courseId: integer("course_id").notNull(),
   notes: text("notes"),
+  // Phase 1: format registry. `format` maps to a scorer in
+  // server/lib/scoring/registry.ts; `formatConfig` is JSON validated by
+  // that scorer's Zod schema. Existing rows backfill to "team_match_play"
+  // with formatConfig=null so they score identically to pre-refactor.
+  format: text("format").notNull().default("team_match_play"),
+  formatConfig: text("format_config", { mode: "json" }),
 });
 export const insertWeekSchema = createInsertSchema(weeks).omit({ id: true });
 export type InsertWeek = z.infer<typeof insertWeekSchema>;

@@ -17,7 +17,8 @@ import bcrypt from "bcryptjs";
 import {
   adjustedGross, computeDifferential, rollingHandicap, type HandicapSettings,
 } from "./lib/handicap";
-import { computeMatchup, type HoleInfo, type TeamForScoring, type PointsConfig } from "./lib/scoring";
+import { type HoleInfo, type TeamForScoring, type PointsConfig } from "./lib/scoring";
+import { getScorer, DEFAULT_FORMAT } from "./lib/scoring/registry";
 import { computeSkins, computeSkinsByMatchup } from "./lib/skins";
 import type { GolfCourseApiCourse } from "./lib/golfCourseApi";
 
@@ -79,7 +80,9 @@ function ensureSchema() {
       week_number INTEGER NOT NULL,
       date TEXT NOT NULL,
       course_id INTEGER NOT NULL,
-      notes TEXT
+      notes TEXT,
+      format TEXT NOT NULL DEFAULT 'team_match_play',
+      format_config TEXT
     );
     CREATE TABLE IF NOT EXISTS matchups (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -307,6 +310,20 @@ function ensureSchema() {
       }
     } catch { /* ignore */ }
   }
+
+  // ---------- Phase 1: scoring format on weeks ----------
+  // `format` defaults to "team_match_play" so every existing week backfills
+  // to the legacy scorer; `format_config` defaults to NULL meaning "inherit
+  // from the league settings row." See server/lib/scoring/registry.ts.
+  try {
+    const cols = sqlite.prepare(`PRAGMA table_info(weeks)`).all() as { name: string }[];
+    if (!cols.some(c => c.name === "format")) {
+      sqlite.exec(`ALTER TABLE weeks ADD COLUMN format TEXT NOT NULL DEFAULT 'team_match_play'`);
+    }
+    if (!cols.some(c => c.name === "format_config")) {
+      sqlite.exec(`ALTER TABLE weeks ADD COLUMN format_config TEXT`);
+    }
+  } catch { /* ignore */ }
 
   // One-time normalization: lowercase all stored usernames so login can be
   // case-insensitive without breaking the unique index. If a collision would
@@ -1108,12 +1125,19 @@ export class Storage {
       // their playing handicap for points calc is 0 (raw vs. raw).
       const aHcp = m.teamAScratch ? 0 : playingHcp(m.teamAId);
       const bHcp = m.teamBScratch ? 0 : playingHcp(m.teamBId);
-      const result = computeMatchup(
-        { teamId: m.teamAId, strokes: aScores, handicap: aHcp },
-        { teamId: m.teamBId, strokes: bScores, handicap: bHcp },
-        holeInfos,
-        pointsCfg,
-      );
+      // Route through the format registry. The week's `format` column tells
+      // us which scorer to use; absent (or null on legacy rows) defaults to
+      // team_match_play so existing data scores identically. Format-specific
+      // config falls back to the global settings row when the week has no
+      // format_config override (today: always; Phase 2 will let admins
+      // override per week).
+      const scorer = getScorer((w as any).format ?? DEFAULT_FORMAT);
+      const result = scorer.compute({
+        a: { id: m.teamAId, kind: "team", strokes: aScores, handicap: aHcp },
+        b: { id: m.teamBId, kind: "team", strokes: bScores, handicap: bHcp },
+        holes: holeInfos,
+        config: (w as any).formatConfig ?? pointsCfg,
+      });
       db.update(matchups).set({
         teamAPoints: result.teamAPoints, teamBPoints: result.teamBPoints,
       }).where(eq(matchups.id, m.id)).run();

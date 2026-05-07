@@ -11,7 +11,8 @@ import {
 } from "@shared/schema";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
-import { computeMatchup, allocateStrokes } from "./lib/scoring";
+import { allocateStrokes } from "./lib/scoring";
+import { getScorer, DEFAULT_FORMAT } from "./lib/scoring/registry";
 import { computePayouts } from "./lib/payouts";
 import { searchCourses as gcaSearch, getCourse as gcaGetCourse } from "./lib/golfCourseApi";
 import { fetchGolfFeatures } from "./lib/overpass";
@@ -978,16 +979,17 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const a = byTeam[tA.id] || {}; const b = byTeam[tB.id] || {};
       let detail = null;
       if (fully(a) && fully(b)) {
-        detail = computeMatchup(
-          { teamId: tA.id, strokes: a, handicap: playingHcp(tA.id) },
-          { teamId: tB.id, strokes: b, handicap: playingHcp(tB.id) },
-          courseHoles.map(h => ({ holeNumber: h.holeNumber, par: h.par, strokeIndex: h.strokeIndex })),
-          {
+        const scorer = getScorer((w as any).format ?? DEFAULT_FORMAT);
+        detail = scorer.compute({
+          a: { id: tA.id, kind: "team", strokes: a, handicap: playingHcp(tA.id) },
+          b: { id: tB.id, kind: "team", strokes: b, handicap: playingHcp(tB.id) },
+          holes: courseHoles.map(h => ({ holeNumber: h.holeNumber, par: h.par, strokeIndex: h.strokeIndex })),
+          config: {
             pointsPerHoleWin: cfg.pointsPerHoleWin,
             pointsPerHoleTie: cfg.pointsPerHoleTie,
             pointsForMatchWin: cfg.pointsForMatchWin,
           },
-        );
+        });
       }
       return {
         id: m.id,
