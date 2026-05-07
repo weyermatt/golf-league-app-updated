@@ -1,0 +1,14 @@
+# Sandbox-only — the real app lives in `golf-league/` with its own .gitignore.
+# These rules guard against tools (npm, etc.) creating artifacts at the repo
+# root by accident.
+node_modules/
+package-lock.json
+package.json
+.env
+.env.local
+.DS_Store
+*.log
+
+# SQLite write-ahead-log files for the committed sample data.db at root.
+data.db-shm
+data.db-wal

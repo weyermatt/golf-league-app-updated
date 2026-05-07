@@ -2,6 +2,22 @@ import { sqliteTable, text, integer, real, uniqueIndex } from "drizzle-orm/sqlit
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+// ---------- Leagues ----------
+// Multi-tenancy foundation. The app currently runs a single league
+// (TNT Golf League, id=1, seeded by ensureSchema). All other tables that
+// hold league-scoped data carry a `leagueId` FK with default 1, so storage
+// reads return identical results for the existing league while being ready
+// to filter once a second league is added.
+export const leagues = sqliteTable("leagues", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  ownerUserId: integer("owner_user_id").notNull(),
+  createdAt: integer("created_at").notNull(),
+});
+export type League = typeof leagues.$inferSelect;
+export const insertLeagueSchema = createInsertSchema(leagues).omit({ id: true });
+export type InsertLeague = z.infer<typeof insertLeagueSchema>;
+
 // ---------- Users ----------
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -19,6 +35,7 @@ export type User = typeof users.$inferSelect;
 // schema for backward compat with old data; not read or written by app code anymore.
 export const players = sqliteTable("players", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  leagueId: integer("league_id").notNull().default(1),
   firstName: text("first_name").notNull(),
   lastName: text("last_name").notNull(),
   currentHandicap: real("current_handicap"), // DEPRECATED — handicaps are team-level
@@ -31,6 +48,7 @@ export type Player = typeof players.$inferSelect;
 // ---------- Teams ----------
 export const teams = sqliteTable("teams", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  leagueId: integer("league_id").notNull().default(1),
   name: text("name").notNull(),
   captainId: integer("captain_id").notNull(),
   mateId: integer("mate_id").notNull(),
@@ -87,6 +105,7 @@ export type Hole = typeof holes.$inferSelect;
 // ---------- Weeks ----------
 export const weeks = sqliteTable("weeks", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  leagueId: integer("league_id").notNull().default(1),
   weekNumber: integer("week_number").notNull(),
   date: text("date").notNull(), // ISO date string
   courseId: integer("course_id").notNull(),
@@ -99,6 +118,7 @@ export type Week = typeof weeks.$inferSelect;
 // ---------- Matchups ----------
 export const matchups = sqliteTable("matchups", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  leagueId: integer("league_id").notNull().default(1),
   weekId: integer("week_id").notNull(),
   teamAId: integer("team_a_id").notNull(),
   teamBId: integer("team_b_id").notNull(),
@@ -181,9 +201,13 @@ export const teamHandicapHistory = sqliteTable("team_handicap_history", {
 }));
 export type TeamHandicapHistory = typeof teamHandicapHistory.$inferSelect;
 
-// ---------- Settings (singleton id=1) ----------
+// ---------- Settings (singleton today; per-league row when multi-league lands) ----------
 export const settings = sqliteTable("settings", {
   id: integer("id").primaryKey(),
+  // For now there's exactly one settings row (id=1) for the only league
+  // (id=1). Adding leagueId now puts the column in place so a future
+  // per-league settings row can land without another migration.
+  leagueId: integer("league_id").notNull().default(1),
   pointsPerHoleWin: real("points_per_hole_win").notNull().default(2),
   pointsPerHoleTie: real("points_per_hole_tie").notNull().default(1),
   pointsForMatchWin: real("points_for_match_win").notNull().default(2),

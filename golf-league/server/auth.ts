@@ -4,6 +4,13 @@ import { storage } from "./storage";
 export interface AuthedRequest extends Request {
   userId?: number;
   userRole?: string;
+  // Resolved league for this request. The app currently runs a single
+  // league (id=1, "TNT Golf League"); future multi-league support will pull
+  // this from a header / subdomain / user membership table. Storage queries
+  // can ignore it for now (only one league exists), but routes that wire
+  // new league-scoped behavior should read from here so the migration is
+  // a one-line change later.
+  leagueId?: number;
 }
 
 // Auth uses BOTH a Bearer token (in-memory on the client) AND a `__Host-sid`
@@ -21,7 +28,15 @@ function getSid(req: Request): string | null {
   return m ? m[1] : null;
 }
 
+// Single-league install: every request is scoped to leagueId=1 unconditionally.
+// When multi-league support lands, this resolves to a per-user / per-host / per-
+// subdomain value instead of a constant.
+const DEFAULT_LEAGUE_ID = 1;
+
 export async function authMiddleware(req: AuthedRequest, _res: Response, next: NextFunction) {
+  // League is resolved unconditionally — even unauthenticated guests viewing
+  // the leaderboard need a leagueId for storage queries to scope on.
+  req.leagueId = DEFAULT_LEAGUE_ID;
   const sid = getSid(req);
   if (!sid) return next();
   const session = storage.getSession(sid);
@@ -41,6 +56,16 @@ export function requireAuth(req: AuthedRequest, res: Response, next: NextFunctio
 export function requireAdmin(req: AuthedRequest, res: Response, next: NextFunction) {
   if (!req.userId) return res.status(401).json({ message: "Authentication required" });
   if (req.userRole !== "admin") return res.status(403).json({ message: "Admin only" });
+  next();
+}
+
+// Asserts a leagueId has been resolved on the request. Today this is a
+// near-no-op because authMiddleware always sets it; it's in place so future
+// per-league storage queries can `requireLeague` and trust `req.leagueId`.
+export function requireLeague(req: AuthedRequest, res: Response, next: NextFunction) {
+  if (req.leagueId == null) {
+    return res.status(400).json({ message: "League not resolved for this request" });
+  }
   next();
 }
 

@@ -31,6 +31,12 @@ export const rawDb = sqlite;
 // ---------- Schema setup ----------
 function ensureSchema() {
   sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS leagues (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      owner_user_id INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT NOT NULL UNIQUE,
@@ -263,6 +269,45 @@ function ensureSchema() {
       sqlite.exec(`ALTER TABLE teams ADD COLUMN handicap_start_week INTEGER NOT NULL DEFAULT 1`);
     }
   } catch { /* ignore */ }
+  // ---------- Phase 0: multi-tenancy foundation ----------
+  // Create the leagues table and seed the implicit league (id=1, "TNT Golf
+  // League"). Then add a `league_id` column with default 1 to every league-
+  // scoped table so future per-league queries can filter without another
+  // migration. All defaults = 1 means existing reads return identical
+  // results — no behavior change for the single-league install.
+  try {
+    sqlite.exec(`
+      CREATE TABLE IF NOT EXISTS leagues (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        owner_user_id INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+    `);
+    const existing = sqlite.prepare(`SELECT id FROM leagues WHERE id = 1`).get();
+    if (!existing) {
+      // Seed the implicit league. owner_user_id falls back to the lowest
+      // admin id, or 1 if there are no admins yet (first-boot edge case).
+      const owner = sqlite
+        .prepare(`SELECT id FROM users WHERE role = 'admin' ORDER BY id ASC LIMIT 1`)
+        .get() as { id: number } | undefined;
+      sqlite
+        .prepare(`INSERT INTO leagues (id, name, owner_user_id, created_at) VALUES (1, ?, ?, ?)`)
+        .run("TNT Golf League", owner?.id ?? 1, Date.now());
+    }
+  } catch { /* ignore */ }
+
+  // Add league_id columns. Each ALTER is gated on a PRAGMA check so this is
+  // idempotent and safe to run on already-migrated databases.
+  for (const table of ["players", "teams", "weeks", "matchups", "settings"]) {
+    try {
+      const cols = sqlite.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+      if (!cols.some(c => c.name === "league_id")) {
+        sqlite.exec(`ALTER TABLE ${table} ADD COLUMN league_id INTEGER NOT NULL DEFAULT 1`);
+      }
+    } catch { /* ignore */ }
+  }
+
   // One-time normalization: lowercase all stored usernames so login can be
   // case-insensitive without breaking the unique index. If a collision would
   // occur (two users with the same case-insensitive name), we keep the
