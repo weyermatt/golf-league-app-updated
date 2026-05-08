@@ -9,10 +9,12 @@
 import type { Scorer } from "./types";
 import { teamMatchPlayScorer } from "./teamMatchPlay";
 import { netStrokePlayScorer } from "./netStrokePlay";
+import { stablefordScorer } from "./stableford";
 
 export const scorers: Record<string, Scorer> = {
   [teamMatchPlayScorer.id]: teamMatchPlayScorer,
   [netStrokePlayScorer.id]: netStrokePlayScorer,
+  [stablefordScorer.id]: stablefordScorer,
 };
 
 /** Default format used when a week has no `format` column value (older rows
