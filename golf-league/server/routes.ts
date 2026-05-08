@@ -12,7 +12,7 @@ import {
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { allocateStrokes } from "./lib/scoring";
-import { getScorer, DEFAULT_FORMAT } from "./lib/scoring/registry";
+import { getScorer, DEFAULT_FORMAT, scorers } from "./lib/scoring/registry";
 import { computePayouts } from "./lib/payouts";
 import { searchCourses as gcaSearch, getCourse as gcaGetCourse } from "./lib/golfCourseApi";
 import { fetchGolfFeatures } from "./lib/overpass";
@@ -528,10 +528,46 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   });
   app.post("/api/weeks", requireAdmin, (req, res) => {
     const data = insertWeekSchema.parse(req.body);
+    // Format-aware validation: if the admin picked a non-default format
+    // (or supplied formatConfig), make sure the format is registered and
+    // the config matches its Zod schema. Catches typos and invalid configs
+    // at write time rather than at score-recompute time.
+    if (data.format) {
+      const scorer = scorers[data.format];
+      if (!scorer) {
+        return res.status(400).json({
+          message: `Unknown scoring format "${data.format}". Registered: [${Object.keys(scorers).join(", ")}]`,
+        });
+      }
+      if (data.formatConfig != null) {
+        const parsed = scorer.configSchema.safeParse(data.formatConfig);
+        if (!parsed.success) {
+          return res.status(400).json({
+            message: `Invalid formatConfig for ${data.format}: ${parsed.error.message}`,
+          });
+        }
+      }
+    }
     res.json(storage.createWeek(data));
   });
   app.patch("/api/weeks/:id", requireAdmin, (req, res) => {
     const data = insertWeekSchema.partial().parse(req.body);
+    if (data.format) {
+      const scorer = scorers[data.format];
+      if (!scorer) {
+        return res.status(400).json({
+          message: `Unknown scoring format "${data.format}". Registered: [${Object.keys(scorers).join(", ")}]`,
+        });
+      }
+      if (data.formatConfig != null) {
+        const parsed = scorer.configSchema.safeParse(data.formatConfig);
+        if (!parsed.success) {
+          return res.status(400).json({
+            message: `Invalid formatConfig for ${data.format}: ${parsed.error.message}`,
+          });
+        }
+      }
+    }
     const w = storage.updateWeek(Number(req.params.id), data);
     storage.recomputeFromWeek(w.id);
     res.json(w);

@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Trash2, KeyRound, Save, UserPlus } from "lucide-react";
 import { CatalogAdmin } from "@/components/CatalogAdmin";
+import { availableFormats, formatLabel } from "@/lib/featureFlags";
 
 export default function Admin() {
   const { user } = useAuth();
@@ -631,11 +632,27 @@ function ScheduleAdmin() {
   const [wn, setWn] = useState("");
   const [date, setDate] = useState("");
   const [courseId, setCourseId] = useState("");
+  // Format defaults to team_match_play (the league's standing format) so
+  // existing flows are unchanged. The dropdown only exposes other formats
+  // when VITE_ENABLE_NEW_FORMATS=true is set in .env at build time — see
+  // client/src/lib/featureFlags.ts.
+  const formats = availableFormats();
+  const [format, setFormat] = useState<string>(formats[0]?.id ?? "team_match_play");
 
   const addWeek = async () => {
     if (!wn || !date || !courseId) return;
-    await apiRequest("POST", "/api/weeks", { weekNumber: Number(wn), date, courseId: Number(courseId), notes: null });
+    await apiRequest("POST", "/api/weeks", {
+      weekNumber: Number(wn),
+      date,
+      courseId: Number(courseId),
+      notes: null,
+      format,
+      // Inherit format-specific defaults from the scorer's Zod schema —
+      // empty object is fine because every config field has a default.
+      formatConfig: format === "team_match_play" ? null : {},
+    });
     setWn(""); setDate(""); setCourseId("");
+    setFormat(formats[0]?.id ?? "team_match_play");
     qc.invalidateQueries();
     toast({ title: "Week added" });
   };
@@ -660,6 +677,20 @@ function ScheduleAdmin() {
               ))}
             </SelectContent>
           </Select>
+          {/* Format dropdown only shows multiple options when
+              VITE_ENABLE_NEW_FORMATS=true. With the flag off, it renders a
+              single-option select that's effectively a label, so legacy
+              admins see no surface change. */}
+          {formats.length > 1 && (
+            <Select value={format} onValueChange={setFormat}>
+              <SelectTrigger className="w-56" data-testid="select-week-format"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {formats.map(f => (
+                  <SelectItem key={f.id} value={f.id}>{f.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <Button onClick={addWeek} data-testid="button-add-week"><Plus className="h-4 w-4 mr-2" />Add</Button>
         </CardContent>
       </Card>
@@ -704,7 +735,19 @@ function WeekMatchupsCard({ week, courses, teams, matchups, onDelete }: any) {
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
-          <CardTitle className="text-base">Week {week.weekNumber} — {week.date} <span className="text-xs ml-2 text-muted-foreground">({course?.layout === "front" ? "Front 9" : "Back 9"})</span></CardTitle>
+          <CardTitle className="text-base">
+            Week {week.weekNumber} — {week.date}
+            <span className="text-xs ml-2 text-muted-foreground">({course?.layout === "front" ? "Front 9" : "Back 9"})</span>
+            {/* Always show the format here for admins — they create
+                weeks with format pickers, so they want the same answer
+                visible at a glance on the management list. Members get
+                the lighter "only when non-default" treatment elsewhere. */}
+            {week.format && (
+              <span className="text-xs ml-2 text-muted-foreground" data-testid={`text-week-format-${week.id}`}>
+                · {formatLabel(week.format)}
+              </span>
+            )}
+          </CardTitle>
           <Button variant="ghost" size="icon" onClick={onDelete} data-testid={`button-delete-week-${week.id}`}><Trash2 className="h-4 w-4" /></Button>
         </div>
       </CardHeader>

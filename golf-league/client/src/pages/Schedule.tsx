@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CalendarDays, Pencil } from "lucide-react";
 import { useAuth } from "@/lib/auth";
+import { formatLabel } from "@/lib/featureFlags";
 
 export default function Schedule() {
   const { data: weeks } = useQuery<any[]>({ queryKey: ["/api/weeks"] });
@@ -60,6 +61,14 @@ export default function Schedule() {
                 {layout && (
                   <Badge variant={layout.layout === "front" ? "default" : "secondary"} className="capitalize">
                     {layout.layout} 9
+                  </Badge>
+                )}
+                {/* Format pill — only when this week diverges from the
+                    league default. Members who only ever play match play
+                    don't need a "Match Play" badge on every week. */}
+                {w.format && w.format !== "team_match_play" && (
+                  <Badge variant="outline" className="text-xs" data-testid={`badge-week-format-${w.id}`}>
+                    {formatLabel(w.format)}
                   </Badge>
                 )}
               </div>

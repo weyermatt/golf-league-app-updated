@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, Coins, Pencil } from "lucide-react";
 import { useAuth } from "@/lib/auth";
+import { formatLabel } from "@/lib/featureFlags";
 
 interface Results {
   week: any;
@@ -54,6 +55,17 @@ export default function WeekDetail() {
         title={`Week ${week.weekNumber}`}
         description={`${week.date} · ${course?.name || ""} · ${course?.layout === "front" ? "Front 9" : "Back 9"}`}
       />
+      {/* Format pill — surfaces what scoring format this week uses. Only
+          rendered when the week diverges from the league default
+          (team_match_play); players have been seeing match-play forever
+          and don't need a label confirming it. */}
+      {week.format && week.format !== "team_match_play" && (
+        <div className="-mt-3 mb-4">
+          <Badge variant="outline" className="text-xs" data-testid={`badge-week-format-${week.id}`}>
+            Format: {formatLabel(week.format)}
+          </Badge>
+        </div>
+      )}
 
       {sortedHoles.length === 0 && (
         <Card><CardContent className="p-6 text-sm text-muted-foreground">
@@ -131,13 +143,19 @@ export default function WeekDetail() {
       {/* Matchups */}
       <div className="space-y-6">
         {matchups.length === 0 && <Card><CardContent className="p-6 text-sm text-muted-foreground">No matchups for this week.</CardContent></Card>}
-        {matchups.map((m: any) => <MatchupCard key={m.id} m={m} holes={sortedHoles} totalPar={totalPar} toDisplay={toDisplay} />)}
+        {matchups.map((m: any) => <MatchupCard key={m.id} m={m} week={week} holes={sortedHoles} totalPar={totalPar} toDisplay={toDisplay} />)}
       </div>
     </div>
   );
 }
 
-function MatchupCard({ m, holes, totalPar, toDisplay }: { m: any; holes: any[]; totalPar: number; toDisplay: (n: number) => number }) {
+function MatchupCard({ m, week, holes, totalPar, toDisplay }: { m: any; week: any; holes: any[]; totalPar: number; toDisplay: (n: number) => number }) {
+  // Match-play formats award per-hole points and roll a match-win bonus.
+  // Stroke-play formats compare net totals once at the end. The per-hole
+  // "Pts" scorecard row only makes sense for match-play formats; the
+  // header gets format-specific labelled stats below.
+  const format = week?.format ?? "team_match_play";
+  const isMatchPlay = format === "team_match_play";
   const aWon = m.teamAPoints != null && m.teamBPoints != null && m.teamAPoints > m.teamBPoints;
   const bWon = m.teamAPoints != null && m.teamBPoints != null && m.teamBPoints > m.teamAPoints;
   const detail = m.detail;
@@ -228,6 +246,29 @@ function MatchupCard({ m, holes, totalPar, toDisplay }: { m: any; holes: any[]; 
             Team Hcps: {m.teamA.name} {detail.teamAHandicap.toFixed(1)} · {m.teamB.name} {detail.teamBHandicap.toFixed(1)}
           </div>
         )}
+        {/* Format-specific labelled stats. Always explicitly named so a
+            league member encountering a new format isn't trying to guess
+            what the bare numbers mean. */}
+        {detail && !isMatchPlay && (() => {
+          // Net total = sum of per-hole net values from the scorer's
+          // HoleResult rows. Computed here (not handed back as a top-level
+          // number) so we can keep the MatchupResult shape unchanged
+          // across formats.
+          const aNet = (detail.holes || []).reduce((s: number, h: any) => s + (h.aNet ?? 0), 0);
+          const bNet = (detail.holes || []).reduce((s: number, h: any) => s + (h.bNet ?? 0), 0);
+          const margin = Math.abs(aNet - bNet);
+          const lead =
+            aNet < bNet ? `${m.teamA.name} by ${margin}` :
+            bNet < aNet ? `${m.teamB.name} by ${margin}` :
+            "Tied";
+          return (
+            <div className="text-xs text-muted-foreground tabular-nums flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
+              <span>Net total ({m.teamA.name}): <span className="font-semibold text-foreground">{aNet}</span></span>
+              <span>Net total ({m.teamB.name}): <span className="font-semibold text-foreground">{bNet}</span></span>
+              <span>Margin: <span className="font-semibold text-foreground">{lead}</span></span>
+            </div>
+          );
+        })()}
       </CardHeader>
       <CardContent>
         {/* Subtle right-edge gradient telegraphs that the scorecard scrolls
@@ -259,8 +300,10 @@ function MatchupCard({ m, holes, totalPar, toDisplay }: { m: any; holes: any[]; 
               {renderTeamRow(teamLabel(m.teamA), rosterTitle(m.teamA), m.teamA.scores, strokesA)}
               {/* Team B — single best-ball row */}
               {renderTeamRow(teamLabel(m.teamB), rosterTitle(m.teamB), m.teamB.scores, strokesB)}
-              {/* Per-hole points */}
-              {detail && (
+              {/* Per-hole points — match-play only. Stroke-play formats
+                  award no per-hole points (they're decided on net totals),
+                  so showing 0/0 across nine cells would just be noise. */}
+              {detail && isMatchPlay && (
                 <tr className="border-t-2 border-border bg-secondary/40">
                   <td className="px-2 py-2 text-left font-semibold">Pts ({m.teamA.name}/{m.teamB.name})</td>
                   {holes.map(h => {
