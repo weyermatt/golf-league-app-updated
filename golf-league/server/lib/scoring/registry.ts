@@ -10,11 +10,17 @@ import type { Scorer } from "./types";
 import { teamMatchPlayScorer } from "./teamMatchPlay";
 import { netStrokePlayScorer } from "./netStrokePlay";
 import { stablefordScorer } from "./stableford";
+import { individualMatchPlayScorer } from "./individualMatchPlay";
 
 export const scorers: Record<string, Scorer> = {
   [teamMatchPlayScorer.id]: teamMatchPlayScorer,
   [netStrokePlayScorer.id]: netStrokePlayScorer,
   [stablefordScorer.id]: stablefordScorer,
+  // Engine-only registration (Phase 2-IMP). Reachable via Phase 1.5 once
+  // per-player scoring + polymorphic matchups land. The admin
+  // Create-week dropdown does NOT list this format yet — see
+  // client/src/lib/featureFlags.ts:ALL_FORMATS.
+  [individualMatchPlayScorer.id]: individualMatchPlayScorer,
 };
 
 /** Default format used when a week has no `format` column value (older rows
