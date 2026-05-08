@@ -150,12 +150,53 @@ export default function WeekDetail() {
 }
 
 function MatchupCard({ m, week, holes, totalPar, toDisplay }: { m: any; week: any; holes: any[]; totalPar: number; toDisplay: (n: number) => number }) {
-  // Match-play formats award per-hole points and roll a match-win bonus.
-  // Stroke-play formats compare net totals once at the end. The per-hole
-  // "Pts" scorecard row only makes sense for match-play formats; the
-  // header gets format-specific labelled stats below.
+  // Format-specific rendering rules. The MatchupResult shape is the same
+  // across formats (the scorers all return the same struct), but what
+  // each piece *means* differs:
+  //   team_match_play  → per-hole match points (real); no header stats.
+  //   net_stroke_play  → per-hole points are 0 (don't show); header
+  //                       shows "Net total" (lower wins) + margin.
+  //   stableford       → per-hole Stableford points (real); header
+  //                       shows "Stableford total" (higher wins) + margin.
+  // Each value gets an explicit label per the owner's "no bare numbers"
+  // rule for new formats.
   const format = week?.format ?? "team_match_play";
-  const isMatchPlay = format === "team_match_play";
+  type RenderRules = {
+    showPerHolePoints: boolean;
+    perHolePointsLabel: string;
+    headerLabel: string | null;
+    higherIsBetter: boolean;
+    /** When the header stat is set, derive the per-team total from this. */
+    totalSource: "sum_net" | "stableford_total" | null;
+  };
+  const renderRules: RenderRules = (() => {
+    switch (format) {
+      case "net_stroke_play":
+        return {
+          showPerHolePoints: false,
+          perHolePointsLabel: "",
+          headerLabel: "Net total",
+          higherIsBetter: false,
+          totalSource: "sum_net",
+        };
+      case "stableford":
+        return {
+          showPerHolePoints: true,
+          perHolePointsLabel: "Stableford pts",
+          headerLabel: "Stableford total",
+          higherIsBetter: true,
+          totalSource: "stableford_total",
+        };
+      default: // team_match_play
+        return {
+          showPerHolePoints: true,
+          perHolePointsLabel: "Pts",
+          headerLabel: null,
+          higherIsBetter: true,
+          totalSource: null,
+        };
+    }
+  })();
   const aWon = m.teamAPoints != null && m.teamBPoints != null && m.teamAPoints > m.teamBPoints;
   const bWon = m.teamAPoints != null && m.teamBPoints != null && m.teamBPoints > m.teamAPoints;
   const detail = m.detail;
@@ -249,22 +290,31 @@ function MatchupCard({ m, week, holes, totalPar, toDisplay }: { m: any; week: an
         {/* Format-specific labelled stats. Always explicitly named so a
             league member encountering a new format isn't trying to guess
             what the bare numbers mean. */}
-        {detail && !isMatchPlay && (() => {
-          // Net total = sum of per-hole net values from the scorer's
-          // HoleResult rows. Computed here (not handed back as a top-level
-          // number) so we can keep the MatchupResult shape unchanged
-          // across formats.
-          const aNet = (detail.holes || []).reduce((s: number, h: any) => s + (h.aNet ?? 0), 0);
-          const bNet = (detail.holes || []).reduce((s: number, h: any) => s + (h.bNet ?? 0), 0);
-          const margin = Math.abs(aNet - bNet);
+        {detail && renderRules.headerLabel && (() => {
+          // Pull the per-team total from the source the format dictates.
+          // Stableford uses the running totals the scorer already
+          // computed (teamAHolePoints / teamBHolePoints); net stroke
+          // play sums the per-hole net values inline. Either way, no
+          // change to MatchupResult — the existing fields cover both.
+          const aTotal = renderRules.totalSource === "stableford_total"
+            ? (detail.teamAHolePoints ?? 0)
+            : (detail.holes || []).reduce((s: number, h: any) => s + (h.aNet ?? 0), 0);
+          const bTotal = renderRules.totalSource === "stableford_total"
+            ? (detail.teamBHolePoints ?? 0)
+            : (detail.holes || []).reduce((s: number, h: any) => s + (h.bNet ?? 0), 0);
+          const margin = Math.abs(aTotal - bTotal);
+          // Lead direction depends on the format. Net stroke play =
+          // lower wins; Stableford = higher wins.
+          const aLeads = renderRules.higherIsBetter ? aTotal > bTotal : aTotal < bTotal;
+          const bLeads = renderRules.higherIsBetter ? bTotal > aTotal : bTotal < aTotal;
           const lead =
-            aNet < bNet ? `${m.teamA.name} by ${margin}` :
-            bNet < aNet ? `${m.teamB.name} by ${margin}` :
+            aLeads ? `${m.teamA.name} by ${margin}` :
+            bLeads ? `${m.teamB.name} by ${margin}` :
             "Tied";
           return (
             <div className="text-xs text-muted-foreground tabular-nums flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
-              <span>Net total ({m.teamA.name}): <span className="font-semibold text-foreground">{aNet}</span></span>
-              <span>Net total ({m.teamB.name}): <span className="font-semibold text-foreground">{bNet}</span></span>
+              <span>{renderRules.headerLabel} ({m.teamA.name}): <span className="font-semibold text-foreground">{aTotal}</span></span>
+              <span>{renderRules.headerLabel} ({m.teamB.name}): <span className="font-semibold text-foreground">{bTotal}</span></span>
               <span>Margin: <span className="font-semibold text-foreground">{lead}</span></span>
             </div>
           );
@@ -300,12 +350,14 @@ function MatchupCard({ m, week, holes, totalPar, toDisplay }: { m: any; week: an
               {renderTeamRow(teamLabel(m.teamA), rosterTitle(m.teamA), m.teamA.scores, strokesA)}
               {/* Team B — single best-ball row */}
               {renderTeamRow(teamLabel(m.teamB), rosterTitle(m.teamB), m.teamB.scores, strokesB)}
-              {/* Per-hole points — match-play only. Stroke-play formats
-                  award no per-hole points (they're decided on net totals),
-                  so showing 0/0 across nine cells would just be noise. */}
-              {detail && isMatchPlay && (
+              {/* Per-hole points row. Match-play and Stableford both
+                  award real per-hole points (different point tables);
+                  net stroke play awards zero per hole and skips the row
+                  entirely. The label changes per format so a Stableford
+                  player isn't trying to map "Pts" to match-play points. */}
+              {detail && renderRules.showPerHolePoints && (
                 <tr className="border-t-2 border-border bg-secondary/40">
-                  <td className="px-2 py-2 text-left font-semibold">Pts ({m.teamA.name}/{m.teamB.name})</td>
+                  <td className="px-2 py-2 text-left font-semibold">{renderRules.perHolePointsLabel} ({m.teamA.name}/{m.teamB.name})</td>
                   {holes.map(h => {
                     const r = hd[h.holeNumber];
                     return (

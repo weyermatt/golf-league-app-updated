@@ -39,6 +39,12 @@ const ALL_FORMATS: FormatOption[] = [
     description: "Lower 9-hole net total wins. Simple win/tie/loss point award; no per-hole points.",
     experimental: true,
   },
+  {
+    id: "stableford",
+    label: "Stableford",
+    description: "Configurable per-hole points (eagle/birdie/par/bogey/double). Higher Stableford total wins.",
+    experimental: true,
+  },
 ];
 
 export function availableFormats(): FormatOption[] {
